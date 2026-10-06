@@ -51,6 +51,9 @@
 | location | TEXT NOT NULL | 存放位置，自由文本，如 `客厅/零食柜/第二层` |
 | purchase_date | TEXT | 购买日期 `YYYY-MM-DD`，可空 |
 | expiry_date | TEXT | 过期日期 `YYYY-MM-DD`，可空 |
+| opened_at | TEXT | 打开时间 `YYYY-MM-DDTHH:MM`（本地时间，无时区后缀），**非必填**，可空 |
+| finished_at | TEXT | 吃完时间 `YYYY-MM-DDTHH:MM`，可空 |
+| status | TEXT NOT NULL DEFAULT 'in_stock' | 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完） |
 | notes | TEXT | 备注，可空 |
 | created_at | TEXT NOT NULL | RFC3339 UTC |
 | updated_at | TEXT NOT NULL | RFC3339 UTC |
@@ -75,26 +78,33 @@
 ### 零食
 | 方法/路径 | 说明 |
 |---|---|
-| `GET /api/snacks` | 查询参数：`q`（name/notes 模糊）、`location`（精确匹配）、`status`=`all\|ok\|expiring\|expired`（默认 `all`）。响应：Snack 数组（**裸数组，非包装对象**） |
+| `GET /api/snacks` | 查询参数：`q`（name/notes 模糊）、`location`（精确匹配）、`expiry_status`=`all\|ok\|expiring\|expired`（默认 `all`，**过期维度**）、`status`=`all\|in_stock\|opened\|finished`（默认 `all`，**生命周期维度**）。响应：Snack 数组（**裸数组，非包装对象**） |
 | `POST /api/snacks` | 请求体见 SnackInput；201 返回 Snack |
 | `PUT /api/snacks/{id}` | 请求体见 SnackInput；200 返回 Snack；不存在 404 |
 | `DELETE /api/snacks/{id}` | `204`；不存在 404 |
 | `GET /api/locations` | 去重后的存放位置字符串数组，按字典序 |
 
 ```jsonc
-// SnackInput（POST/PUT 通用；日期为 YYYY-MM-DD 字符串，可为 null）
+// SnackInput（POST/PUT 通用；日期为 YYYY-MM-DD，时间为 YYYY-MM-DDTHH:MM，均可为 null）
 { "name": "string(必填,非空)", "quantity": 1, "location": "string(必填,非空)",
-  "purchase_date": "2026-01-05", "expiry_date": null, "notes": null }
+  "purchase_date": "2026-01-05", "expiry_date": null, "notes": null,
+  // 以下为新增字段，均可省略；省略时 status 默认 'in_stock'，两个时间为 null
+  "status": "in_stock",          // 可选值 in_stock|opened|finished，非法值 400
+  "opened_at": null,              // 打开时间，非必填
+  "finished_at": null }           // 吃完时间
 // Snack = SnackInput + { "id": 1, "created_at": "...", "updated_at": "..." }
 ```
-校验失败（缺字段、quantity<0、日期格式非 `YYYY-MM-DD`）→ 400 `{"error":...}`。
+校验失败（缺字段、quantity<0、日期格式非 `YYYY-MM-DD`、时间格式非 `YYYY-MM-DDTHH:MM`、status 非法）→ 400 `{"error":...}`。
+服务端规则：`status="finished"` 且请求未带 `finished_at` 时，服务端自动填充当前本地时间；`finished_at` 仅在 `status="finished"` 时有意义（其他状态下携带可保存但不强制清除，前后端 UI 不应展示矛盾数据）。
 
 ### 过期提醒
-`GET /api/reminders` → 数组，元素为 Snack 字段再加：
+`GET /api/reminders` → 数组，元素为 Snack 字段（**含新字段 status/opened_at/finished_at**）再加：
 ```jsonc
-{ ..., "days_left": -3,           // 今天到 expiry_date 的天数；无 expiry_date 的不出现
-      "status": "expired" }       // expired（已过期）| critical（≤3天）| warning（≤7天）
+{ ..., "days_left": -3,            // 今天到 expiry_date 的天数
+      "level": "expired" }         // expired（已过期）| critical（≤3天）| warning（≤7天）
 ```
+注意：提醒分级字段名为 **`level`**（Snack 自身的 `status` 是生命周期状态，两者不可混用）。
+**排除规则：`status == "finished"`（已吃完）的零食不出现在提醒中。**
 仅返回 `expiry_date` 非空且 `days_left ≤ 7` 的零食，按 expiry_date 升序。`days_left < 0` → `expired`；`0..3` → `critical`；`4..7` → `warning`。**日期比较必须基于服务器本地日期（YYYY-MM-DD 字符串比较即可）**，因为这是家庭本地应用。
 
 ### 账户管理（仅 is_admin=1 可访问，非管理员 403）
@@ -108,7 +118,12 @@
 
 页面（standalone components + Router + guards）：
 1. **/login 登录页**：用户名/密码，错误提示。
-2. **/ 零食库存**（需登录）：表格列 = 名称、数量、存放位置、购买日期、过期日期、状态徽章、备注、操作(编辑/删除)。状态徽章：已过期=红、≤7天=橙、正常=绿、无过期日期=灰。顶部：搜索框、存放位置下拉筛选（来自 `/api/locations`）、状态筛选、"+ 添加零食"按钮（弹窗或表单页均可）。
+2. **/ 零食库存**（需登录）：表格列 = 名称、数量、存放位置、购买日期、过期日期、**过期状态徽章**、**生命周期状态徽章**、**打开时间**、**吃完时间**、备注、操作(编辑/删除)。
+   - 过期状态徽章（基于 expiry_date）：已过期=红、≤7天=橙、正常=绿、无过期日期=灰。
+   - 生命周期状态徽章（status）：`in_stock`=蓝(未打开)、`opened`=紫(已打开)、`finished`=灰(已吃完)。
+   - 顶部筛选：搜索框、存放位置下拉（来自 `/api/locations`）、过期状态筛选（请求参数 `expiry_status`）、生命周期状态筛选（请求参数 `status`)、"+ 添加零食"按钮（弹窗或表单页均可）。
+   - 编辑/添加表单字段含：状态下拉、打开时间（`datetime-local` 输入，**选填**）、吃完时间（`datetime-local`，选填；状态选"已吃完"且吃完时间留空时由后端自动填充）。
+   - 建议在操作列提供快捷动作："标记打开"（status→opened）与"标记吃完"（status→finished，finished_at 取当前时间），即一次 PUT 请求完成。
 3. **/reminders 过期提醒**（需登录）：按 status 分组/标色展示，显示剩余天数。
 4. **/users 账户管理**（需 admin guard，菜单项对非 admin 隐藏）：用户列表、添加账户、删除账户（含"不能删除自己"的错误展示）。
 5. **/change-password 修改密码**（需登录）。
