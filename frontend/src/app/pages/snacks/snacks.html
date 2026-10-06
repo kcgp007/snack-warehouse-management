@@ -1,0 +1,236 @@
+<section class="page-head">
+  <div class="page-title">
+    <h2>零食库存</h2>
+    @if (reminderCount() > 0) {
+      <a class="count-badge" routerLink="/reminders" title="查看过期提醒">{{ reminderCount() }}</a>
+    }
+  </div>
+  <div class="toolbar">
+    <input
+      class="search"
+      placeholder="搜索名称或备注…"
+      [ngModel]="q()"
+      (ngModelChange)="onSearch($event)"
+    />
+    <select [ngModel]="locationFilter()" (ngModelChange)="onLocationChange($event)">
+      <option value="">全部位置</option>
+      @for (loc of locations(); track loc) {
+        <option [value]="loc">{{ loc }}</option>
+      }
+    </select>
+    <select [ngModel]="expiryStatusFilter()" (ngModelChange)="onExpiryStatusChange($event)">
+      <option value="all">全部过期状态</option>
+      <option value="ok">正常</option>
+      <option value="expiring">即将过期</option>
+      <option value="expired">已过期</option>
+    </select>
+    <select [ngModel]="lifecycleFilter()" (ngModelChange)="onLifecycleChange($event)">
+      <option value="all">全部生命周期</option>
+      <option value="in_stock">未打开</option>
+      <option value="opened">已打开</option>
+      <option value="finished">已吃完</option>
+    </select>
+    <button class="btn primary" type="button" (click)="openCreate()">+ 添加零食</button>
+  </div>
+</section>
+
+@if (error()) {
+  <div class="banner error">{{ error() }}</div>
+}
+@if (notice()) {
+  <div class="banner notice">{{ notice() }}</div>
+}
+
+@if (loading()) {
+  <p class="muted">加载中…</p>
+}
+
+<div class="table-wrap">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th>数量</th>
+        <th>存放位置</th>
+        <th>购买日期</th>
+        <th>过期日期</th>
+        <th>过期状态</th>
+        <th>生命周期</th>
+        <th>打开时间</th>
+        <th>吃完时间</th>
+        <th>备注</th>
+        <th class="col-ops">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (snack of snacks(); track snack.id) {
+        <tr>
+          <td>{{ snack.name }}</td>
+          <td>{{ snack.quantity }}</td>
+          <td>{{ snack.location }}</td>
+          <td>{{ snack.purchase_date ?? '—' }}</td>
+          <td>{{ snack.expiry_date ?? '—' }}</td>
+          <td>
+            <span class="badge" [attr.data-status]="expiryBadgeOf(snack).cls">{{
+              expiryBadgeOf(snack).label
+            }}</span>
+          </td>
+          <td>
+            <span class="lifecycle" [attr.data-lifecycle]="lifecycleBadgeOf(snack).cls">{{
+              lifecycleBadgeOf(snack).label
+            }}</span>
+          </td>
+          <td>{{ snack.opened_at ? snack.opened_at.replace('T', ' ') : '—' }}</td>
+          <td>{{ snack.finished_at ? snack.finished_at.replace('T', ' ') : '—' }}</td>
+          <td class="notes">{{ snack.notes ?? '—' }}</td>
+          <td class="col-ops">
+            @if (snack.status === 'in_stock') {
+              <button
+                class="btn small"
+                type="button"
+                title="标记打开"
+                [disabled]="quickBusy()"
+                (click)="markOpened(snack)"
+              >
+                标记打开
+              </button>
+            }
+            @if (snack.status !== 'finished') {
+              <button
+                class="btn small"
+                type="button"
+                title="标记吃完"
+                [disabled]="quickBusy()"
+                (click)="markFinished(snack)"
+              >
+                标记吃完
+              </button>
+            }
+            <button class="btn small" type="button" (click)="openEdit(snack)">编辑</button>
+            <button class="btn small danger" type="button" (click)="remove(snack)">删除</button>
+          </td>
+        </tr>
+      } @empty {
+        <tr>
+          <td class="empty" colspan="11">暂无零食，点击“+ 添加零食”创建第一条记录。</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</div>
+
+@if (modalOpen()) {
+  <div class="modal-backdrop" (click)="closeModal()">
+    <div class="modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+      <h3>{{ editing() ? '编辑零食' : '添加零食' }}</h3>
+      <form (ngSubmit)="save()">
+        <label class="field">
+          <span>名称 *</span>
+          <input
+            name="name"
+            required
+            [ngModel]="form().name"
+            (ngModelChange)="patch({ name: $event })"
+            placeholder="如 薯片"
+          />
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>数量 *</span>
+            <input
+              name="quantity"
+              type="number"
+              min="0"
+              step="1"
+              required
+              [ngModel]="form().quantity"
+              (ngModelChange)="onQuantityChange($event)"
+            />
+          </label>
+          <label class="field">
+            <span>存放位置 *</span>
+            <input
+              name="location"
+              required
+              [ngModel]="form().location"
+              (ngModelChange)="patch({ location: $event })"
+              placeholder="如 客厅/零食柜/第二层"
+            />
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span>购买日期</span>
+            <input
+              name="purchase_date"
+              type="date"
+              [ngModel]="form().purchase_date"
+              (ngModelChange)="patch({ purchase_date: $event })"
+            />
+          </label>
+          <label class="field">
+            <span>过期日期</span>
+            <input
+              name="expiry_date"
+              type="date"
+              [ngModel]="form().expiry_date"
+              (ngModelChange)="patch({ expiry_date: $event })"
+            />
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span>状态</span>
+            <select
+              name="status"
+              [ngModel]="form().status"
+              (ngModelChange)="patch({ status: $event })"
+            >
+              <option value="in_stock">未打开</option>
+              <option value="opened">已打开</option>
+              <option value="finished">已吃完</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>打开时间（选填）</span>
+            <input
+              name="opened_at"
+              type="datetime-local"
+              [ngModel]="form().opened_at"
+              (ngModelChange)="patch({ opened_at: $event })"
+            />
+          </label>
+          <label class="field">
+            <span>吃完时间（选填）</span>
+            <input
+              name="finished_at"
+              type="datetime-local"
+              [ngModel]="form().finished_at"
+              (ngModelChange)="patch({ finished_at: $event })"
+            />
+          </label>
+        </div>
+        <p class="form-hint">状态选“已吃完”且吃完时间留空时，将自动填入当前时间。</p>
+        <label class="field">
+          <span>备注</span>
+          <textarea
+            name="notes"
+            rows="2"
+            [ngModel]="form().notes"
+            (ngModelChange)="patch({ notes: $event })"
+            placeholder="可选"
+          ></textarea>
+        </label>
+        @if (formError()) {
+          <div class="form-error">{{ formError() }}</div>
+        }
+        <div class="modal-actions">
+          <button class="btn" type="button" (click)="closeModal()">取消</button>
+          <button class="btn primary" type="submit" [disabled]="saving()">
+            {{ saving() ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+}

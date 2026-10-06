@@ -1,0 +1,29 @@
+@if (showNav()) {
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" routerLink="/">零食仓库管理</a>
+      <nav class="nav">
+        <a routerLink="/" [routerLinkActiveOptions]="{ exact: true }" routerLinkActive="active"
+          >零食库存</a
+        >
+        <a routerLink="/reminders" routerLinkActive="active">
+          过期提醒
+          @if (reminders.count() > 0) {
+            <span class="nav-badge">{{ reminders.count() }}</span>
+          }
+        </a>
+        @if (auth.isAdmin()) {
+          <a routerLink="/users" routerLinkActive="active">账户管理</a>
+        }
+        <a routerLink="/change-password" routerLinkActive="active">修改密码</a>
+      </nav>
+      <div class="topbar-user">
+        <span class="username">{{ auth.user()?.username }}</span>
+        <button class="btn btn-ghost" type="button" (click)="logout()">退出登录</button>
+      </div>
+    </div>
+  </header>
+}
+<main class="page">
+  <router-outlet></router-outlet>
+</main>

@@ -1,0 +1,88 @@
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-title h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.count-badge {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.notes {
+  max-width: 180px;
+  color: #486581;
+}
+
+.col-ops {
+  white-space: nowrap;
+  width: 230px;
+}
+
+.col-ops .btn + .btn {
+  margin-left: 6px;
+}
+
+.empty {
+  text-align: center;
+  color: #829ab1;
+  padding: 28px 12px !important;
+}
+
+.muted {
+  color: #829ab1;
+}
+
+.form-hint {
+  margin: 0 0 12px;
+  color: #829ab1;
+  font-size: 12px;
+}
+
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.field-row .field {
+  flex: 1;
+}

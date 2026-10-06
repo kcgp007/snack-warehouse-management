@@ -1,0 +1,56 @@
+<section class="page-head">
+  <div class="page-title">
+    <h2>过期提醒</h2>
+    @if (reminders.count() > 0) {
+      <span class="count-badge">{{ reminders.count() }}</span>
+    }
+  </div>
+  <p class="hint">列出 7 天内到期或已过期的零食（按过期日期升序），返回库存页可继续管理 →</p>
+</section>
+
+@if (groups().length === 0) {
+  <div class="empty-state">
+    <p>当前没有临期或过期的零食 🎉</p>
+    <a routerLink="/">返回零食库存</a>
+  </div>
+} @else {
+  @for (group of groups(); track group.level) {
+    <section class="group" [attr.data-level]="group.level">
+      <h3>
+        <span class="dot"></span>
+        {{ group.title }}
+        <span class="group-count">{{ group.items.length }}</span>
+      </h3>
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>数量</th>
+              <th>存放位置</th>
+              <th>过期日期</th>
+              <th>剩余天数</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (item of group.items; track item.id) {
+              <tr>
+                <td>{{ item.name }}</td>
+                <td>{{ item.quantity }}</td>
+                <td>{{ item.location }}</td>
+                <td>{{ item.expiry_date }}</td>
+                <td>
+                  <span class="badge" [attr.data-status]="item.level">{{
+                    daysText(item.days_left)
+                  }}</span>
+                </td>
+                <td class="notes">{{ item.notes ?? '—' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  }
+}

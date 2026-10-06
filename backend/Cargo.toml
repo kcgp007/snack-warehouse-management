@@ -1,0 +1,18 @@
+[package]
+name = "snack-warehouse-backend"
+version = "0.1.0"
+edition = "2021"
+description = "零食仓库管理平台后端（Rust + axum + SQLite）"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net", "signal"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+argon2 = "0.6"
+rand = "0.8"
+chrono = "0.4"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

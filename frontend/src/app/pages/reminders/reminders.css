@@ -1,0 +1,110 @@
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-title h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.count-badge {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.hint {
+  margin: 0;
+  color: #627d98;
+  font-size: 13px;
+}
+
+.group {
+  margin-bottom: 22px;
+}
+
+.group h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9fb3c8;
+}
+
+.group[data-level='expired'] h3 {
+  color: #b91c1c;
+}
+
+.group[data-level='expired'] .dot {
+  background: #dc2626;
+}
+
+.group[data-level='critical'] h3 {
+  color: #c2410c;
+}
+
+.group[data-level='critical'] .dot {
+  background: #f97316;
+}
+
+.group[data-level='warning'] h3 {
+  color: #a16207;
+}
+
+.group[data-level='warning'] .dot {
+  background: #eab308;
+}
+
+.group-count {
+  background: #e4e7eb;
+  color: #334e68;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.notes {
+  max-width: 220px;
+  color: #486581;
+}
+
+.empty-state {
+  background: #fff;
+  border: 1px dashed #cbd2d9;
+  border-radius: 8px;
+  padding: 40px 16px;
+  text-align: center;
+  color: #486581;
+}

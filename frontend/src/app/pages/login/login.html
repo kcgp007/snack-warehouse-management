@@ -1,0 +1,33 @@
+<div class="login-card">
+  <h1>零食仓库管理平台</h1>
+  <p class="subtitle">请使用账号登录</p>
+  <form (ngSubmit)="submit()">
+    <label class="field">
+      <span>用户名</span>
+      <input
+        name="username"
+        autocomplete="username"
+        [ngModel]="username()"
+        (ngModelChange)="username.set($event)"
+        placeholder="请输入用户名"
+      />
+    </label>
+    <label class="field">
+      <span>密码</span>
+      <input
+        name="password"
+        type="password"
+        autocomplete="current-password"
+        [ngModel]="password()"
+        (ngModelChange)="password.set($event)"
+        placeholder="请输入密码"
+      />
+    </label>
+    @if (error()) {
+      <div class="form-error">{{ error() }}</div>
+    }
+    <button class="btn primary block" type="submit" [disabled]="submitting()">
+      {{ submitting() ? '登录中…' : '登 录' }}
+    </button>
+  </form>
+</div>

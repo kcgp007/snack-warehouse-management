@@ -1,0 +1,1182 @@
+//! 后端集成测试：使用 axum `tower::ServiceExt::oneshot` 内嵌请求，不启动真实端口。
+//!
+//! 覆盖（契约 §5 + 两个契约增量）：
+//! - 登录成功/失败、无 token 401、非管理员 /api/users 403
+//! - snacks CRUD 与校验 400、GET /api/snacks 过滤（expiry_status/status 改名与新增）
+//! - 生命周期 status 校验/筛选、finished 自动填充 finished_at
+//! - reminders 分级（level 字段）、days_left 计算、排序、排除 finished
+//! - admin 创建/删除用户、删除自己 400、change-password
+//! - admin 自动初始化：空库创建 / 重启不重置改过的密码 / ADMIN_* 覆盖
+//! - 静态托管与 SPA fallback（含目录不存在的优雅降级）
+//!
+//! 注意：所有测试共用进程级互斥锁串行执行，因为 admin 初始化会读取
+//! 环境变量（ADMIN_USERNAME/ADMIN_PASSWORD），并行会产生竞态。
+
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+
+use axum::body::{to_bytes, Body};
+use axum::http::{header, Method, Request, StatusCode};
+use axum::Router;
+use serde_json::{json, Value};
+use snack_warehouse_backend::{build_app, AppConfig};
+use tower::ServiceExt;
+
+// ---------------------------------------------------------------------------
+// 测试基础设施
+// ---------------------------------------------------------------------------
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn test_guard() -> MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// 设置环境变量并在 Drop（含测试失败/panic）时恢复原值。
+struct EnvGuard {
+    saved: Vec<(&'static str, Option<String>)>,
+}
+
+impl EnvGuard {
+    fn set(pairs: &[(&'static str, &str)]) -> Self {
+        let mut saved = Vec::new();
+        for (key, value) in pairs {
+            saved.push((*key, std::env::var(key).ok()));
+            std::env::set_var(key, value);
+        }
+        Self { saved }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, old) in &self.saved {
+            match old {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+/// 独立临时目录（数据库 + 静态目录），Drop 时清理。
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("snackwh-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("创建临时目录");
+        Self { path }
+    }
+
+    fn cfg(&self) -> AppConfig {
+        AppConfig {
+            db_path: self.path.join("app.db"),
+            static_dir: self.path.join("static"),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+struct Resp {
+    status: StatusCode,
+    content_type: Option<String>,
+    body: String,
+}
+
+impl Resp {
+    fn json(&self) -> Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|err| panic!("响应不是 JSON（{err}）: {}", self.body))
+    }
+}
+
+/// 发送原始字符串请求体。刻意**不设置** Content-Type，验证后端不依赖该头
+/// （父级集成用 curl 冒烟时可直接 -d 提交）。
+async fn send_raw(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    body: Option<String>,
+) -> Resp {
+    let mut builder = Request::builder()
+        .method(Method::from_bytes(method.as_bytes()).expect("方法"))
+        .uri(uri);
+    if let Some(token) = token {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    let req = builder
+        .body(Body::from(body.unwrap_or_default()))
+        .expect("构造请求");
+    let resp = app.clone().oneshot(req).await.expect("oneshot");
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("读取响应体");
+    Resp {
+        status,
+        content_type,
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+    }
+}
+
+async fn send(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    body: Option<Value>,
+) -> Resp {
+    send_raw(app, method, uri, token, body.map(|value| value.to_string())).await
+}
+
+/// 登录并断言成功，返回响应 JSON（含 token/user）。
+async fn login(app: &Router, username: &str, password: &str) -> Value {
+    let resp = send(
+        app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({ "username": username, "password": password })),
+    )
+    .await;
+    assert_eq!(
+        resp.status,
+        StatusCode::OK,
+        "登录 {username} 失败: {}",
+        resp.body
+    );
+    resp.json()
+}
+
+async fn token_of(app: &Router, username: &str, password: &str) -> String {
+    let body = login(app, username, password).await;
+    body.get("token")
+        .and_then(Value::as_str)
+        .expect("token 字段")
+        .to_owned()
+}
+
+/// 服务器本地日期（相对偏移），与后端 reminders 计算使用同一时钟。
+fn local_date(offset_days: i64) -> String {
+    (chrono::Local::now().date_naive() + chrono::TimeDelta::days(offset_days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn snack(name: &str, location: &str, expiry_date: Option<&str>) -> Value {
+    json!({
+        "name": name,
+        "quantity": 1,
+        "location": location,
+        "purchase_date": null,
+        "expiry_date": expiry_date,
+        "notes": null
+    })
+}
+
+async fn create_snack(app: &Router, token: &str, payload: Value) -> Value {
+    let resp = send(app, "POST", "/api/snacks", Some(token), Some(payload)).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "创建零食失败: {}", resp.body);
+    resp.json()
+}
+
+fn names(list: &Value) -> Vec<String> {
+    list.as_array()
+        .expect("应为数组")
+        .iter()
+        .map(|item| {
+            item.get("name")
+                .and_then(Value::as_str)
+                .expect("name 字段")
+                .to_owned()
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// 认证
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn login_success_and_failure() {
+    let _guard = test_guard();
+    let dir = TempDir::new("login");
+    let app = build_app(dir.cfg()).expect("build_app");
+
+    // 登录成功（空库自动初始化的 admin，契约 §1/§3）
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin", "password": "admin123"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let body = resp.json();
+    let token = body["token"].as_str().expect("token");
+    assert_eq!(token.len(), 64, "token 应为 32 字节熵的 hex 编码");
+    assert_eq!(body["user"]["username"], "admin");
+    assert_eq!(body["user"]["is_admin"], true);
+    assert!(body["user"]["id"].is_i64());
+
+    // GET /api/auth/me
+    let resp = send(&app, "GET", "/api/auth/me", Some(token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    assert_eq!(resp.json()["username"], "admin");
+
+    // 密码错误 → 401 + 统一错误体
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin", "password": "wrong-password"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    assert!(!resp.json()["error"].as_str().unwrap_or("").is_empty());
+
+    // 用户不存在 → 401
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "nobody", "password": "whatever"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+
+    // 字段缺失 → 按“失败 401”处理
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+
+    // 非法 JSON → 401
+    let resp = send_raw(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some("not-json".to_owned()),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_requires_bearer_token_401() {
+    let _guard = test_guard();
+    let dir = TempDir::new("auth401");
+    let app = build_app(dir.cfg()).expect("build_app");
+
+    // 除 POST /api/auth/login 外，所有 /api/* 无 token → 401（契约 §2）
+    let protected: &[(&str, &str)] = &[
+        ("GET", "/api/snacks"),
+        ("POST", "/api/snacks"),
+        ("PUT", "/api/snacks/1"),
+        ("DELETE", "/api/snacks/1"),
+        ("GET", "/api/locations"),
+        ("GET", "/api/reminders"),
+        ("GET", "/api/users"),
+        ("POST", "/api/users"),
+        ("DELETE", "/api/users/1"),
+        ("GET", "/api/auth/me"),
+        ("POST", "/api/auth/logout"),
+        ("POST", "/api/auth/change-password"),
+        ("GET", "/api/unknown-endpoint"),
+    ];
+    for (method, uri) in protected {
+        let resp = send(&app, method, uri, None, Some(json!({}))).await;
+        assert_eq!(
+            resp.status,
+            StatusCode::UNAUTHORIZED,
+            "{method} {uri} 无 token 应为 401，实际 {}",
+            resp.status
+        );
+        assert!(
+            resp.json().get("error").is_some(),
+            "{method} {uri} 错误体应为 {{error}}"
+        );
+    }
+
+    // 无效 token → 401
+    let resp = send(&app, "GET", "/api/snacks", Some("invalid-token"), None).await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+
+    // Bearer 后为空 → 401
+    let resp = send(&app, "GET", "/api/snacks", Some(""), None).await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+
+    // 非 /api 路径不需要 token（静态 fallback，此处目录不存在 → 404 而非 401）
+    let resp = send(&app, "GET", "/", None, None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn users_endpoints_forbidden_for_non_admin() {
+    let _guard = test_guard();
+    let dir = TempDir::new("admin403");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let admin_token = token_of(&app, "admin", "admin123").await;
+
+    // 管理员创建普通用户
+    let resp = send(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&admin_token),
+        Some(json!({"username": "alice", "password": "alice-pass"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let alice = resp.json();
+    let alice_id = alice["id"].as_i64().expect("id");
+    assert_eq!(alice["is_admin"], false);
+    let alice_token = token_of(&app, "alice", "alice-pass").await;
+
+    // 非管理员访问账户管理接口 → 403（契约 §3）
+    let resp = send(&app, "GET", "/api/users", Some(&alice_token), None).await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN);
+
+    let resp = send(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&alice_token),
+        Some(json!({"username": "mallory", "password": "mallory-pass"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN);
+
+    let resp = send(
+        &app,
+        "DELETE",
+        &format!("/api/users/{alice_id}"),
+        Some(&alice_token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN);
+
+    // 目标 id 不存在也先鉴权 → 403（而非 404）
+    let resp = send(&app, "DELETE", "/api/users/99999", Some(&alice_token), None).await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN);
+
+    // 普通用户仍可访问业务接口
+    let resp = send(&app, "GET", "/api/snacks", Some(&alice_token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    // 管理员可访问
+    let resp = send(&app, "GET", "/api/users", Some(&admin_token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+}
+
+// ---------------------------------------------------------------------------
+// 零食 CRUD 与校验
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn snacks_crud_and_validation() {
+    let _guard = test_guard();
+    let dir = TempDir::new("snacks-crud");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    // CREATE → 201，返回完整 Snack
+    let payload = json!({
+        "name": "薯片", "quantity": 3, "location": "客厅/零食柜",
+        "purchase_date": "2026-01-05", "expiry_date": "2027-01-01",
+        "notes": "原味", "opened_at": null, "finished_at": null, "status": "in_stock"
+    });
+    let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(payload)).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let created = resp.json();
+    let id = created["id"].as_i64().expect("id");
+    assert_eq!(created["name"], "薯片");
+    assert_eq!(created["quantity"], 3);
+    assert_eq!(created["status"], "in_stock");
+    assert_eq!(created["purchase_date"], "2026-01-05");
+    assert!(created["created_at"].is_string());
+    assert!(created["updated_at"].is_string());
+
+    // 省略 status/opened_at/finished_at → 默认 in_stock / null（契约 §3）
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({"name": "牛奶", "quantity": 1, "location": "厨房/冰箱"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let milk = resp.json();
+    assert_eq!(milk["status"], "in_stock");
+    assert!(milk["opened_at"].is_null());
+    assert!(milk["finished_at"].is_null());
+
+    // LIST → 裸数组（契约 §3）
+    let resp = send(&app, "GET", "/api/snacks", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let list = resp.json();
+    assert!(list.is_array(), "GET /api/snacks 必须是裸数组");
+    assert_eq!(list.as_array().unwrap().len(), 2);
+
+    // UPDATE → 200，全量替换
+    let resp = send(
+        &app,
+        "PUT",
+        &format!("/api/snacks/{id}"),
+        Some(&token),
+        Some(json!({
+            "name": "薯片(更新)", "quantity": 10, "location": "客厅/零食柜/第二层",
+            "purchase_date": null, "expiry_date": null, "notes": null
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let updated = resp.json();
+    assert_eq!(updated["name"], "薯片(更新)");
+    assert_eq!(updated["quantity"], 10);
+    assert!(updated["purchase_date"].is_null());
+
+    // UPDATE 不存在 → 404
+    let resp = send(
+        &app,
+        "PUT",
+        "/api/snacks/99999",
+        Some(&token),
+        Some(json!({"name": "x", "quantity": 1, "location": "y"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+
+    // DELETE → 204；再次删除 → 404
+    let resp = send(&app, "DELETE", &format!("/api/snacks/{id}"), Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT);
+    let resp = send(&app, "DELETE", &format!("/api/snacks/{id}"), Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+
+    // 校验失败 → 400 + {"error"}（缺字段 / quantity<0 / 日期时间格式 / status 非法）
+    let bad_cases: Vec<Value> = vec![
+        json!({}),                                                     // 缺全部必填
+        json!({"quantity": 1, "location": "客厅"}),                    // 缺 name
+        json!({"name": "x", "location": "客厅"}),                      // 缺 quantity
+        json!({"name": "x", "quantity": 1}),                           // 缺 location
+        json!({"name": "  ", "quantity": 1, "location": "客厅"}),       // 空名称
+        json!({"name": "x", "quantity": 1, "location": " "}),          // 空位置
+        json!({"name": "x", "quantity": -1, "location": "客厅"}),       // 负数量
+        json!({"name": "x", "quantity": "abc", "location": "客厅"}),    // quantity 类型错误
+        json!({"name": "x", "quantity": 1, "location": "客厅", "purchase_date": "2026/01/05"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "expiry_date": "not-a-date"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "expiry_date": "2026-02-30"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "status": "bad-status"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "opened_at": "2026-01-05 10:00"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "finished_at": "2026-01-05"}),
+    ];
+    for (index, case) in bad_cases.iter().enumerate() {
+        let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(case.clone())).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "case {index}: {}", resp.body);
+        assert!(resp.json().get("error").is_some(), "case {index} 错误体");
+    }
+
+    // 非法 JSON 请求体 → 400
+    let resp = send_raw(&app, "POST", "/api/snacks", Some(&token), Some("nope".to_owned())).await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // PUT 同样执行校验（先校验后查存在性）
+    let resp = send(
+        &app,
+        "PUT",
+        "/api/snacks/99999",
+        Some(&token),
+        Some(json!({"name": "x", "quantity": -5, "location": "y"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// 生命周期状态（契约增量 1）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn snacks_lifecycle_status_and_finished_autofill() {
+    let _guard = test_guard();
+    let dir = TempDir::new("lifecycle");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    // status=opened + opened_at 正常保存
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "酸奶", "quantity": 2, "location": "厨房/冰箱",
+            "status": "opened", "opened_at": "2026-03-01T09:30"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let yogurt = resp.json();
+    assert_eq!(yogurt["status"], "opened");
+    assert_eq!(yogurt["opened_at"], "2026-03-01T09:30");
+
+    // status=finished 未带 finished_at → 服务端自动填充当前本地时间（契约 §3 服务端规则）
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({"name": "饼干", "quantity": 1, "location": "客厅", "status": "finished"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let biscuit = resp.json();
+    assert_eq!(biscuit["status"], "finished");
+    let finished_at = biscuit["finished_at"].as_str().expect("自动填充 finished_at");
+    assert_eq!(finished_at.len(), 16, "应为 YYYY-MM-DDTHH:MM: {finished_at}");
+    assert_eq!(&finished_at[10..11], "T");
+    assert_eq!(&finished_at[4..5], "-");
+
+    // status=finished 带显式 finished_at → 保留原值
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "蛋糕", "quantity": 1, "location": "客厅",
+            "status": "finished", "finished_at": "2026-03-02T18:00"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED);
+    assert_eq!(resp.json()["finished_at"], "2026-03-02T18:00");
+
+    // 非法时间格式 → 400（POST 与 PUT）
+    for field in ["opened_at", "finished_at"] {
+        let mut payload = json!({"name": "x", "quantity": 1, "location": "y"});
+        payload[field] = json!("2026-03-01 09:30");
+        let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(payload.clone())).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{field} {}", resp.body);
+    }
+
+    // 非法 status 枚举 → 400（POST 与 PUT）
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({"name": "x", "quantity": 1, "location": "y", "status": "eaten"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // PUT 全量替换：省略 status → 回到默认 in_stock
+    let resp = send(
+        &app,
+        "PUT",
+        &format!("/api/snacks/{}", yogurt["id"].as_i64().unwrap()),
+        Some(&token),
+        Some(json!({"name": "酸奶", "quantity": 2, "location": "厨房/冰箱"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let updated = resp.json();
+    assert_eq!(updated["status"], "in_stock");
+    assert!(updated["opened_at"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// 列表过滤（q / location / expiry_status / status）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn snacks_list_filters() {
+    let _guard = test_guard();
+    let dir = TempDir::new("snacks-filters");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    // 1 薯片：过期(expired)，notes 含“辣味”
+    let mut chips = snack("薯片", "客厅/零食柜", Some(&local_date(-1)));
+    chips["notes"] = json!("辣味");
+    create_snack(&app, &token, chips).await;
+    // 2 牛奶：expiring（+3 天），生命周期 opened
+    let mut milk = snack("牛奶", "厨房/冰箱", Some(&local_date(3)));
+    milk["status"] = json!("opened");
+    milk["opened_at"] = json!(format!("{}T08:00", local_date(-1)));
+    create_snack(&app, &token, milk).await;
+    // 3 饼干：ok（+30 天），生命周期 finished
+    let mut biscuit = snack("饼干", "客厅/零食柜", Some(&local_date(30)));
+    biscuit["status"] = json!("finished");
+    create_snack(&app, &token, biscuit).await;
+    // 4 面条：无过期日期，in_stock
+    create_snack(&app, &token, snack("面条", "阳台/储物箱", None)).await;
+
+    // 缺省 → 全部（裸数组）
+    let resp = send(&app, "GET", "/api/snacks", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["薯片", "牛奶", "饼干", "面条"]);
+
+    // q 匹配 name
+    let resp = send(&app, "GET", "/api/snacks?q=薯", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["薯片"]);
+    // q 匹配 notes
+    let resp = send(&app, "GET", "/api/snacks?q=辣味", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["薯片"]);
+    // q 无匹配
+    let resp = send(&app, "GET", "/api/snacks?q=不存在", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), Vec::<String>::new());
+
+    // location 精确匹配
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?location=%E5%AE%A2%E5%8E%85%2F%E9%9B%B6%E9%A3%9F%E6%9F%9C",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(names(&resp.json()), vec!["薯片", "饼干"]);
+
+    // expiry_status 过期维度（契约改名后的参数）
+    let resp = send(&app, "GET", "/api/snacks?expiry_status=expired", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["薯片"]);
+    let resp = send(&app, "GET", "/api/snacks?expiry_status=expiring", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["牛奶"]);
+    let resp = send(&app, "GET", "/api/snacks?expiry_status=ok", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["饼干", "面条"]);
+    let resp = send(&app, "GET", "/api/snacks?expiry_status=all", Some(&token), None).await;
+    assert_eq!(names(&resp.json()).len(), 4);
+
+    // status 生命周期维度
+    let resp = send(&app, "GET", "/api/snacks?status=in_stock", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["薯片", "面条"]);
+    let resp = send(&app, "GET", "/api/snacks?status=opened", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["牛奶"]);
+    let resp = send(&app, "GET", "/api/snacks?status=finished", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["饼干"]);
+
+    // 两个维度可组合
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?expiry_status=ok&status=finished",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(names(&resp.json()), vec!["饼干"]);
+
+    // 非法枚举 → 400
+    let resp = send(&app, "GET", "/api/snacks?expiry_status=weird", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    // 改名后的破坏性变更：旧值 expired 现在是非法 status → 400
+    let resp = send(&app, "GET", "/api/snacks?status=expired", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // GET /api/locations：去重 + 字典序
+    let resp = send(&app, "GET", "/api/locations", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let locations = resp.json();
+    let mut sorted = locations.as_array().unwrap().clone();
+    sorted.sort_by(|a, b| a.as_str().unwrap().cmp(b.as_str().unwrap()));
+    assert_eq!(*locations.as_array().unwrap(), sorted, "应按字典序");
+    let values: Vec<&str> = locations
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(values, vec!["厨房/冰箱", "客厅/零食柜", "阳台/储物箱"]);
+    assert_eq!(values.len(), 3, "应去重");
+}
+
+// ---------------------------------------------------------------------------
+// 过期提醒（level 分级、days_left、排序、排除 finished）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reminders_level_order_and_finished_exclusion() {
+    let _guard = test_guard();
+    let dir = TempDir::new("reminders");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    // 近期数据：只在 days_left ≤ 7 的窗口内
+    create_snack(&app, &token, snack("过期奶", "厨房/冰箱", Some(&local_date(-3)))).await;
+    create_snack(&app, &token, snack("今天到期", "厨房/冰箱", Some(&local_date(0)))).await;
+    let mut soon = snack("两天", "厨房/冰箱", Some(&local_date(2)));
+    soon["status"] = json!("opened");
+    create_snack(&app, &token, soon).await;
+    create_snack(&app, &token, snack("五天", "客厅/零食柜", Some(&local_date(5)))).await;
+    create_snack(&app, &token, snack("七天", "客厅/零食柜", Some(&local_date(7)))).await;
+    // 应被排除：远期 / 无过期日期 / 已吃完
+    create_snack(&app, &token, snack("远期", "客厅/零食柜", Some(&local_date(30)))).await;
+    create_snack(&app, &token, snack("无日期", "阳台/储物箱", None)).await;
+    let mut done = snack("已吃完", "厨房/冰箱", Some(&local_date(1)));
+    done["status"] = json!("finished");
+    create_snack(&app, &token, done).await;
+
+    let resp = send(&app, "GET", "/api/reminders", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let reminders = resp.json();
+    let items = reminders.as_array().expect("提醒应为数组");
+    assert_eq!(items.len(), 5, "应排除远期/无过期日期/已吃完: {reminders}");
+
+    // 按 expiry_date 升序
+    assert_eq!(
+        names(&reminders),
+        vec!["过期奶", "今天到期", "两天", "五天", "七天"]
+    );
+
+    // 分级字段为 level（非 status），值与 days_left 计算正确
+    let expected_levels = ["expired", "critical", "critical", "warning", "warning"];
+    let expected_days: [i64; 5] = [-3, 0, 2, 5, 7];
+    for (index, (item, (level, days))) in items
+        .iter()
+        .zip(expected_levels.into_iter().zip(expected_days))
+        .enumerate()
+    {
+        assert_eq!(item["level"], level, "item {index}");
+        assert_eq!(item["days_left"].as_i64(), Some(days), "item {index}");
+    }
+
+    // 元素 = Snack 全字段（含新字段 status/opened_at/finished_at）+ days_left + level
+    let first = &items[0];
+    for key in [
+        "id",
+        "name",
+        "quantity",
+        "location",
+        "purchase_date",
+        "expiry_date",
+        "opened_at",
+        "finished_at",
+        "status",
+        "notes",
+        "created_at",
+        "updated_at",
+        "days_left",
+        "level",
+    ] {
+        assert!(first.get(key).is_some(), "提醒元素缺少字段 {key}");
+    }
+    // level 与 Snack 的生命周期 status 不混用
+    assert_eq!(first["status"], "in_stock");
+    assert_eq!(first["level"], "expired");
+    // 生命周期 opened 的零食也出现在提醒中（只有 finished 被排除）
+    assert_eq!(items[2]["status"], "opened");
+}
+
+// ---------------------------------------------------------------------------
+// 账户管理
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn admin_user_management() {
+    let _guard = test_guard();
+    let dir = TempDir::new("users");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let admin = login(&app, "admin", "admin123").await;
+    let admin_token = admin["token"].as_str().unwrap().to_owned();
+    let admin_id = admin["user"]["id"].as_i64().expect("admin id");
+
+    // 创建用户 → 201，is_admin=false，含 created_at
+    let resp = send(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&admin_token),
+        Some(json!({"username": "bob", "password": "bob-secret"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let bob = resp.json();
+    let bob_id = bob["id"].as_i64().expect("id");
+    assert_eq!(bob["username"], "bob");
+    assert_eq!(bob["is_admin"], false);
+    assert!(bob["created_at"].is_string());
+
+    // 用户名重复 → 409
+    let resp = send(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&admin_token),
+        Some(json!({"username": "bob", "password": "another-secret"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CONFLICT);
+    assert!(resp.json().get("error").is_some());
+
+    // 创建校验 → 400
+    for payload in [
+        json!({}),
+        json!({"username": "carol"}),
+        json!({"password": "carol-pass"}),
+        json!({"username": " ", "password": "carol-pass"}),
+        json!({"username": "carol", "password": ""}),
+    ] {
+        let resp = send(&app, "POST", "/api/users", Some(&admin_token), Some(payload)).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
+    }
+
+    // 用户列表包含 admin 与 bob
+    let resp = send(&app, "GET", "/api/users", Some(&admin_token), None).await;
+    let users = resp.json();
+    let items = users.as_array().expect("数组");
+    assert!(items.len() >= 2);
+    assert_eq!(items[0]["username"], "admin");
+    assert_eq!(items[0]["is_admin"], true);
+    assert!(items.iter().any(|u| u["username"] == "bob"));
+
+    // 删除自己 → 400，文案必须与契约完全一致
+    let resp = send(
+        &app,
+        "DELETE",
+        &format!("/api/users/{admin_id}"),
+        Some(&admin_token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    assert_eq!(resp.json()["error"], "不能删除当前登录账户");
+
+    // bob 删除前先登录（用于验证 sessions 级联删除）
+    let bob_token = token_of(&app, "bob", "bob-secret").await;
+    let resp = send(&app, "GET", "/api/auth/me", Some(&bob_token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    // 管理员删除 bob → 204；其会话立即失效（级联）
+    let resp = send(&app, "DELETE", &format!("/api/users/{bob_id}"), Some(&admin_token), None).await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT);
+    let resp = send(&app, "GET", "/api/auth/me", Some(&bob_token), None).await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED, "删除用户应级联删除 sessions");
+
+    // 再次删除 → 404；不存在的 id → 404
+    let resp = send(&app, "DELETE", &format!("/api/users/{bob_id}"), Some(&admin_token), None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    let resp = send(&app, "DELETE", "/api/users/99999", Some(&admin_token), None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn change_password_flow() {
+    let _guard = test_guard();
+    let dir = TempDir::new("change-password");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let admin_token = token_of(&app, "admin", "admin123").await;
+
+    // 新密码 <6 → 400
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/change-password",
+        Some(&admin_token),
+        Some(json!({"old_password": "admin123", "new_password": "12345"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // 原密码错误 → 400
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/change-password",
+        Some(&admin_token),
+        Some(json!({"old_password": "wrong-old", "new_password": "new-secret-1"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // 缺字段 → 400
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/change-password",
+        Some(&admin_token),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+
+    // 成功 → 204；旧密码失效、新密码可登录
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/change-password",
+        Some(&admin_token),
+        Some(json!({"old_password": "admin123", "new_password": "new-secret-1"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT, "{}", resp.body);
+
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin", "password": "admin123"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    let _ = token_of(&app, "admin", "new-secret-1").await;
+
+    // 普通用户也可修改自己的密码
+    let resp = send(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&token_of(&app, "admin", "new-secret-1").await),
+        Some(json!({"username": "dave", "password": "dave-pass"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED);
+    let dave_token = token_of(&app, "dave", "dave-pass").await;
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/change-password",
+        Some(&dave_token),
+        Some(json!({"old_password": "dave-pass", "new_password": "dave-new-pass"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT);
+    let _ = token_of(&app, "dave", "dave-new-pass").await;
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "dave", "password": "dave-pass"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn logout_invalidates_session() {
+    let _guard = test_guard();
+    let dir = TempDir::new("logout");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    let resp = send(&app, "GET", "/api/auth/me", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    // 登出 → 204
+    let resp = send(&app, "POST", "/api/auth/logout", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT, "{}", resp.body);
+
+    // token 已失效 → 401
+    let resp = send(&app, "GET", "/api/auth/me", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------
+// admin 自动初始化（契约增量 2）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn admin_auto_init_on_empty_database() {
+    let _guard = test_guard();
+    let dir = TempDir::new("admin-init-empty");
+    let app = build_app(dir.cfg()).expect("build_app");
+
+    // 空库启动 → admin 可用默认密码登录且 is_admin=true
+    let body = login(&app, "admin", "admin123").await;
+    assert_eq!(body["user"]["username"], "admin");
+    assert_eq!(body["user"]["is_admin"], true);
+
+    let token = body["token"].as_str().unwrap();
+    let resp = send(&app, "GET", "/api/users", Some(token), None).await;
+    let users = resp.json();
+    let items = users.as_array().unwrap();
+    assert_eq!(items.len(), 1, "空库应只初始化一个管理员");
+    assert_eq!(items[0]["username"], "admin");
+    assert_eq!(items[0]["is_admin"], true);
+    assert!(items[0]["created_at"].is_string());
+}
+
+#[tokio::test]
+async fn admin_auto_init_preserves_changed_password() {
+    let _guard = test_guard();
+    let dir = TempDir::new("admin-init-restart");
+    let app = build_app(dir.cfg()).expect("build_app");
+
+    // 用户先改密
+    let token = token_of(&app, "admin", "admin123").await;
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/change-password",
+        Some(&token),
+        Some(json!({"old_password": "admin123", "new_password": "reboot-proof-1"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT);
+
+    // “重启”：同一数据库重新执行初始化逻辑（幂等铁律：绝不覆盖已有用户密码）
+    let restarted = build_app(dir.cfg()).expect("重启 build_app");
+
+    // 用户改过的密码仍有效
+    let resp = send(
+        &restarted,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin", "password": "reboot-proof-1"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    // 默认密码不再有效（未被重置）
+    let resp = send(
+        &restarted,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin", "password": "admin123"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_auto_init_respects_env_overrides() {
+    let _guard = test_guard();
+    // 全局锁保证设置环境变量期间没有其他测试在启动应用
+    let _env = EnvGuard::set(&[
+        ("ADMIN_USERNAME", "root"),
+        ("ADMIN_PASSWORD", "root-secret-1"),
+    ]);
+    let dir = TempDir::new("admin-init-env");
+    let app = build_app(dir.cfg()).expect("build_app");
+
+    // 按覆盖值创建的管理员可登录
+    let body = login(&app, "root", "root-secret-1").await;
+    assert_eq!(body["user"]["username"], "root");
+    assert_eq!(body["user"]["is_admin"], true);
+
+    // 默认 admin 未被创建
+    let resp = send(
+        &app,
+        "POST",
+        "/api/auth/login",
+        None,
+        Some(json!({"username": "admin", "password": "admin123"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------
+// 静态托管与 SPA fallback（契约 §0）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn static_spa_fallback_and_graceful_missing_dir() {
+    let _guard = test_guard();
+
+    // (a) 静态目录不存在（build.sh 尚未运行）→ 优雅 404，不 panic、不 401
+    let missing = TempDir::new("static-missing");
+    let app = build_app(missing.cfg()).expect("build_app");
+    let resp = send(&app, "GET", "/", None, None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    let resp = send(&app, "GET", "/reminders", None, None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+
+    // (b) 静态目录存在
+    let dir = TempDir::new("static-present");
+    let cfg = dir.cfg();
+    std::fs::create_dir_all(cfg.static_dir.join("assets")).expect("创建静态目录");
+    std::fs::write(cfg.static_dir.join("index.html"), "<html>SPA-INDEX-MARKER</html>")
+        .expect("写 index");
+    std::fs::write(cfg.static_dir.join("assets").join("app.js"), "console.log(1);")
+        .expect("写 js");
+    // 静态目录之外的敏感文件（用于目录穿越断言）
+    std::fs::write(dir.path().join("SECRET.txt"), "secret-source-marker").expect("写 secret");
+    let app = build_app(cfg).expect("build_app");
+
+    // GET / → index.html，无需登录，Content-Type 正确
+    let resp = send(&app, "GET", "/", None, None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert!(resp.body.contains("SPA-INDEX-MARKER"));
+    assert!(
+        resp.content_type
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("text/html"),
+        "content-type: {:?}",
+        resp.content_type
+    );
+
+    // 未知前端路由 → SPA fallback 到 index.html
+    let resp = send(&app, "GET", "/reminders", None, None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    assert!(resp.body.contains("SPA-INDEX-MARKER"));
+
+    // 不存在的构建产物文件 → 同样回退 index.html
+    let resp = send(&app, "GET", "/main-abc123.js", None, None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    assert!(resp.body.contains("SPA-INDEX-MARKER"));
+
+    // 存在的文件 → 原样返回 + 正确 MIME
+    let resp = send(&app, "GET", "/assets/app.js", None, None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    assert_eq!(resp.body, "console.log(1);");
+    assert!(
+        resp.content_type
+            .as_deref()
+            .unwrap_or_default()
+            .contains("javascript"),
+        "content-type: {:?}",
+        resp.content_type
+    );
+
+    // 目录穿越 → 不得读取静态目录之外的文件
+    for uri in ["/../SECRET.txt", "/%2e%2e/SECRET.txt", "/assets/../../SECRET.txt"] {
+        let resp = send(&app, "GET", uri, None, None).await;
+        assert!(
+            !resp.body.contains("secret-source-marker"),
+            "{uri} 泄漏了目录外文件"
+        );
+        assert!(resp.status == StatusCode::OK || resp.status == StatusCode::NOT_FOUND);
+    }
+
+    // /api/* 优先于静态路由：无 token → 401；带 token 的未知接口 → 404 JSON
+    let resp = send(&app, "GET", "/api/unknown", None, None).await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    let admin_token = token_of(&app, "admin", "admin123").await;
+    let resp = send(&app, "GET", "/api/unknown", Some(&admin_token), None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    assert!(resp.json().get("error").is_some());
+}

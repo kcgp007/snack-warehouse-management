@@ -1,0 +1,78 @@
+<section class="page-head">
+  <h2>账户管理</h2>
+  <p class="hint">仅管理员可见；新建账户均为普通账户（非管理员）。</p>
+</section>
+
+@if (error()) {
+  <div class="banner error">{{ error() }}</div>
+}
+@if (notice()) {
+  <div class="banner notice">{{ notice() }}</div>
+}
+
+<form class="add-form" (ngSubmit)="add()">
+  <input
+    name="new-username"
+    placeholder="新用户名"
+    autocomplete="off"
+    [ngModel]="newUsername()"
+    (ngModelChange)="newUsername.set($event)"
+  />
+  <input
+    name="new-password"
+    type="password"
+    placeholder="初始密码"
+    autocomplete="new-password"
+    [ngModel]="newPassword()"
+    (ngModelChange)="newPassword.set($event)"
+  />
+  <button class="btn primary" type="submit" [disabled]="adding()">
+    {{ adding() ? '添加中…' : '+ 添加账户' }}
+  </button>
+</form>
+
+@if (loading()) {
+  <p class="muted">加载中…</p>
+}
+
+<div class="table-wrap">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>用户名</th>
+        <th>是否管理员</th>
+        <th>创建时间</th>
+        <th class="col-ops">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (user of users(); track user.id) {
+        <tr>
+          <td>{{ user.id }}</td>
+          <td>
+            {{ user.username }}
+            @if (user.id === currentUserId()?.id) {
+              <span class="tag">当前登录</span>
+            }
+          </td>
+          <td>
+            @if (user.is_admin) {
+              <span class="badge admin">是</span>
+            } @else {
+              <span class="badge">否</span>
+            }
+          </td>
+          <td>{{ user.created_at ?? '—' }}</td>
+          <td class="col-ops">
+            <button class="btn small danger" type="button" (click)="remove(user)">删除</button>
+          </td>
+        </tr>
+      } @empty {
+        <tr>
+          <td class="empty" colspan="5">暂无账户。</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</div>
