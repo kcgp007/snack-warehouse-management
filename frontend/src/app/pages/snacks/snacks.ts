@@ -5,13 +5,14 @@ import { forkJoin, Subject } from 'rxjs';
 import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { apiErrorMessage } from '../../api-error';
+import { ExpiryStatusFilter, LifecycleStatusFilter, Snack, SnackInput } from '../../models';
 import {
-  ExpiryStatusFilter,
-  LifecycleStatusFilter,
-  Snack,
-  SnackInput,
-} from '../../models';
-import { LifecycleBadge, SnackBadge, currentLocalMinute, lifecycleBadge, snackBadgeOf } from '../../snack-status';
+  LifecycleBadge,
+  SnackBadge,
+  currentLocalMinute,
+  lifecycleBadge,
+  snackBadgeOf,
+} from '../../snack-status';
 import { ReminderService } from '../../services/reminder.service';
 import { SnackService } from '../../services/snack.service';
 import { SnackFormModel, formToSnackInput, lifecycleTimes } from './snack-form';
@@ -212,7 +213,11 @@ export class Snacks {
 
   /** 快捷动作：一次 PUT 完成，保留其他字段。 */
   protected markOpened(snack: Snack): void {
-    this.quickPut(snack, { ...snackToInput(snack), status: 'opened' }, `「${snack.name}」已标记打开`);
+    this.quickPut(
+      snack,
+      { ...snackToInput(snack), status: 'opened' },
+      `「${snack.name}」已标记打开`,
+    );
   }
 
   protected markFinished(snack: Snack): void {
@@ -239,6 +244,20 @@ export class Snacks {
 
   protected lifecycleBadgeOf(snack: Snack): LifecycleBadge {
     return lifecycleBadge(snack.status);
+  }
+
+  /** 按生命周期状态屏蔽矛盾时间：未打开不显示任何时间，吃完时间仅在已吃完时显示。 */
+  protected timeCellOf(snack: Snack, kind: 'opened' | 'finished'): string {
+    if (kind === 'finished') {
+      if (snack.status !== 'finished' || !snack.finished_at) {
+        return '—';
+      }
+      return snack.finished_at.replace('T', ' ');
+    }
+    if (snack.status === 'in_stock' || !snack.opened_at) {
+      return '—';
+    }
+    return snack.opened_at.replace('T', ' ');
   }
 
   private quickPut(snack: Snack, input: SnackInput, message: string): void {

@@ -80,8 +80,8 @@
               lifecycleBadgeOf(snack).label
             }}</span>
           </td>
-          <td>{{ snack.opened_at ? snack.opened_at.replace('T', ' ') : '—' }}</td>
-          <td>{{ snack.finished_at ? snack.finished_at.replace('T', ' ') : '—' }}</td>
+          <td>{{ timeCellOf(snack, 'opened') }}</td>
+          <td>{{ timeCellOf(snack, 'finished') }}</td>
           <td class="notes">{{ snack.notes ?? '—' }}</td>
           <td class="col-ops">
             @if (snack.status === 'in_stock') {
