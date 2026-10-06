@@ -3,6 +3,7 @@
 //! 覆盖（契约 §5 + 两个契约增量）：
 //! - 登录成功/失败、无 token 401、非管理员 /api/users 403
 //! - snacks CRUD 与校验 400、GET /api/snacks 过滤（expiry_status/status 改名与新增）
+//! - 搜索的 LIKE 通配符转义（`100%` / `a_b` 按字面量命中，`ESCAPE '\'` 回归）
 //! - 生命周期 status 校验/筛选、finished 自动填充 finished_at
 //! - reminders 分级（level 字段）、days_left 计算、排序、排除 finished
 //! - admin 创建/删除用户、删除自己 400、change-password
@@ -717,6 +718,38 @@ async fn snacks_list_filters() {
         .collect();
     assert_eq!(values, vec!["厨房/冰箱", "客厅/零食柜", "阳台/储物箱"]);
     assert_eq!(values.len(), 3, "应去重");
+}
+
+// ---------------------------------------------------------------------------
+// 搜索：LIKE 通配符转义（ESCAPE 子句回归）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn snacks_search_escapes_like_wildcards() {
+    let _guard = test_guard();
+    let dir = TempDir::new("snacks-like-escape");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    // 名称含字面量 `%`：`100%` 与会通配符误命中的 `100袋`
+    create_snack(&app, &token, snack("能量棒100%", "客厅/零食柜", None)).await;
+    create_snack(&app, &token, snack("能量棒100袋", "客厅/零食柜", None)).await;
+    // 名称含字面量 `_`：`a_b` 与会被 `_` 通配符误命中的 `aXb`
+    create_snack(&app, &token, snack("薯条a_b口味", "厨房/冰箱", None)).await;
+    create_snack(&app, &token, snack("薯条aXb口味", "厨房/冰箱", None)).await;
+
+    // `100%`：只命中包含字面量 `100%` 的名称（`%` 不再是通配符）
+    let resp = send(&app, "GET", "/api/snacks?q=100%25", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(names(&resp.json()), vec!["能量棒100%"]);
+
+    // `a_b`：只命中字面量 `a_b`，不误命中 `aXb`（`_` 不再是单字符通配符）
+    let resp = send(&app, "GET", "/api/snacks?q=a_b", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["薯条a_b口味"]);
+
+    // 普通子串搜索不受转义影响：`100` 仍同时命中两个名称
+    let resp = send(&app, "GET", "/api/snacks?q=100", Some(&token), None).await;
+    assert_eq!(names(&resp.json()), vec!["能量棒100%", "能量棒100袋"]);
 }
 
 // ---------------------------------------------------------------------------

@@ -202,7 +202,9 @@ pub(crate) async fn list(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        wheres.push("(name LIKE ? OR notes LIKE ?)".to_owned());
+        // ESCAPE 必须显式声明，否则 `escape_like` 写入的 `\%` / `\_` 只是普通字符，
+        // `%`/`_` 仍会被 SQLite 当通配符（搜 `100%`/`a_b` 会漏检或误命中）。
+        wheres.push("(name LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\')".to_owned());
         let pattern = format!("%{}%", escape_like(term));
         binds.push(Value::Text(pattern.clone()));
         binds.push(Value::Text(pattern));

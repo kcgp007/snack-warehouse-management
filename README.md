@@ -29,6 +29,7 @@ snack-warehouse-management/
 ├── CONTRACT.md      # 前后端集成契约（唯一事实来源）
 ├── README.md        # 本文件
 ├── build.sh         # 一键编译脚本
+├── run.sh           # 一键运行脚本（必要时先自动编译）
 ├── backend/         # Rust 后端
 │   ├── src/         # main.rs（入口/环境变量）、lib.rs（路由装配）、auth/snacks/reminders/users/db/static_files...
 │   ├── tests/api.rs # 集成测试（tower::ServiceExt::oneshot，无需真实端口）
@@ -45,11 +46,17 @@ snack-warehouse-management/
 # 1) 一键编译（npm install + ng build → 产物拷贝到 backend/static/ → cargo build，可重复执行）
 ./build.sh
 
-# 2) 运行后端（默认监听 http://127.0.0.1:3000）
-./backend/target/debug/snack-warehouse-backend
+# 2) 一键运行（必要时会先自动 ./build.sh；默认监听 http://127.0.0.1:3000，Ctrl-C 停止）
+./run.sh
 ```
 
 浏览器访问 <http://127.0.0.1:3000> 即可使用。
+
+手动方式（可选，仅在不使用 `run.sh` 时）：
+
+```bash
+./backend/target/debug/snack-warehouse-backend
+```
 
 ### 环境变量
 
@@ -61,6 +68,8 @@ snack-warehouse-management/
 | `PORT` | `3000` | 监听端口 |
 | `ADMIN_USERNAME` | `admin` | 首次启动自动初始化的管理员用户名 |
 | `ADMIN_PASSWORD` | `admin123` | 首次启动自动初始化的管理员密码 |
+
+经 `./run.sh` 启动时，脚本会为未设置的变量填入上表默认值，并把相对路径（如 `data/app.db`）按仓库根目录解析。
 
 ### 默认账号与安全提示
 

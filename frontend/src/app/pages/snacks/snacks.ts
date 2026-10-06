@@ -10,23 +10,11 @@ import {
   LifecycleStatusFilter,
   Snack,
   SnackInput,
-  SnackLifecycle,
 } from '../../models';
 import { LifecycleBadge, SnackBadge, currentLocalMinute, lifecycleBadge, snackBadgeOf } from '../../snack-status';
 import { ReminderService } from '../../services/reminder.service';
 import { SnackService } from '../../services/snack.service';
-
-interface SnackFormModel {
-  name: string;
-  quantity: string;
-  location: string;
-  purchase_date: string;
-  expiry_date: string;
-  notes: string;
-  status: SnackLifecycle;
-  opened_at: string;
-  finished_at: string;
-}
+import { SnackFormModel, formToSnackInput, lifecycleTimes } from './snack-form';
 
 const emptyForm = (): SnackFormModel => ({
   name: '',
@@ -40,7 +28,10 @@ const emptyForm = (): SnackFormModel => ({
   finished_at: '',
 });
 
-/** Snack → SnackInput（用于快捷动作：保留全部既有字段，仅改 status 相关字段）。 */
+/**
+ * Snack → SnackInput（用于快捷动作：保留全部既有字段，仅改 status 相关字段）。
+ * 时间字段同样走 `lifecycleTimes`，避免快捷动作把矛盾数据原样写回。
+ */
 function snackToInput(snack: Snack): SnackInput {
   return {
     name: snack.name,
@@ -50,8 +41,7 @@ function snackToInput(snack: Snack): SnackInput {
     expiry_date: snack.expiry_date,
     notes: snack.notes,
     status: snack.status,
-    opened_at: snack.opened_at,
-    finished_at: snack.finished_at,
+    ...lifecycleTimes(snack.status, snack.opened_at, snack.finished_at),
   };
 }
 
@@ -198,20 +188,9 @@ export class Snacks {
       this.formError.set('数量必须是不小于 0 的整数');
       return;
     }
-    // 状态选“已吃完”且吃完时间留空时，前端填充当前时间（后端亦会自动填充）
-    const finishedAt =
-      form.status === 'finished' && !form.finished_at ? currentLocalMinute() : form.finished_at;
-    const input: SnackInput = {
-      name,
-      quantity,
-      location,
-      purchase_date: form.purchase_date || null,
-      expiry_date: form.expiry_date || null,
-      notes: form.notes.trim() || null,
-      status: form.status,
-      opened_at: form.opened_at || null,
-      finished_at: finishedAt || null,
-    };
+    // 状态/时间一致性归一化（契约 §3）：finished 才带 finished_at（留空则填当前时间），
+    // in_stock 不带 opened_at/finished_at —— 例如“已吃完→未打开”保存后不再残留矛盾时间。
+    const input: SnackInput = formToSnackInput(form);
     const editing = this.editing();
     this.saving.set(true);
     this.formError.set('');

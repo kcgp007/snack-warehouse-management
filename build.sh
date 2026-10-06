@@ -33,5 +33,6 @@ cd "$ROOT_DIR/backend"
 cargo build
 
 echo "编译成功"
-echo "下一步：运行后端（默认 http://127.0.0.1:3000）："
-echo "  SNACK_DB_PATH=data/app.db ./backend/target/debug/snack-warehouse-backend"
+echo "下一步：运行 ./run.sh（默认 http://127.0.0.1:3000，Ctrl-C 停止）"
+echo "  ./run.sh"
+echo "手动方式（可选）：SNACK_DB_PATH=data/app.db ./backend/target/debug/snack-warehouse-backend"
