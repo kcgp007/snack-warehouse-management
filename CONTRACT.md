@@ -9,7 +9,8 @@
   snack-warehouse-management/
   ├── CONTRACT.md          # 本文件（父级所有，子agent只读）
   ├── README.md            # 集成阶段所有者编写
-  ├── build.sh             # 集成阶段所有者编写（前端构建+拷贝+后端构建）
+  ├── build.sh             # 一键编译脚本（集成阶段所有者编写）
+  ├── run.sh               # 一键运行脚本（集成阶段所有者编写）
   ├── .gitignore           # 父级所有，子agent不得修改
   ├── backend/             # 后端 lane 独占
   └── frontend/            # 前端 lane 独占
@@ -17,7 +18,17 @@
 - **静态资源托管规则**：
   - 后端从 `backend/static/` 目录提供静态文件（目录可由环境变量 `STATIC_DIR` 覆盖，默认 `backend/static`）。
   - `/api/*` 路径永远优先于静态路由；非 `/api` 且磁盘上无对应文件的路径一律回退到 `index.html`（SPA fallback）。
-  - `backend/static/` 及其内容不提交到 git（.gitignore 已忽略），由 build.sh 生成。
+  - **一键编译 `build.sh`（repo 根，bash，`set -euo pipefail`，可重复执行）**：
+  1) `cd frontend && npm install && npm run build`；
+  2) 把 Angular 构建产物目录（含 index.html 的 dist 子目录）内容拷贝到 `backend/static/`（保证 `backend/static/index.html` 存在）；
+  3) `cd backend && cargo build`（debug 即可）。
+  结束时打印“编译成功”及下一步提示（运行 `./run.sh`）。
+- **一键运行 `run.sh`（repo 根，bash，`set -euo pipefail`）**：
+  1) 若 `backend/static/index.html` 或后端二进制不存在，先自动调用 `./build.sh`；
+  2) 以环境变量默认值启动后端（支持 `PORT` 默认 3000、`STATIC_DIR`、`SNACK_DB_PATH` 默认 `data/app.db`、`ADMIN_USERNAME`/`ADMIN_PASSWORD`）；
+  3) 前台运行并转发信号（trap SIGINT/SIGTERM，Ctrl-C 能干净退出子进程）；启动成功后打印访问地址（如 `http://127.0.0.1:3000`）。
+  两脚本均需 `chmod +x`，并在 README 的“快速开始”中作为主要方式说明。
+- `backend/static/` 及其内容不提交到 git（.gitignore 已忽略），由 build.sh 生成。
 
 ## 1. 数据模型（SQLite）
 
@@ -145,4 +156,4 @@
 
 - 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
 - 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误。
-- 集成：`./build.sh` 一键成功；启动后端后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback。
+- 集成：`./build.sh` 一键编译成功；`./run.sh` 一键运行后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback→Ctrl-C 干净退出（进程无残留）。
