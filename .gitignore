@@ -1,0 +1,24 @@
+# Rust
+backend/target/
+*.pdb
+
+# Angular / Node
+node_modules/
+frontend/.angular/
+frontend/dist/
+
+# 构建生成的静态资源（由 build.sh 产出）
+backend/static/
+
+# 数据库与本地数据
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 环境与编辑器
+.env
+.vscode/
+.idea/
+*.log
