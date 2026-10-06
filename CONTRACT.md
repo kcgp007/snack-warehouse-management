@@ -21,7 +21,13 @@
 
 ## 1. 数据模型（SQLite）
 
-默认数据库文件：`data/app.db`（可用环境变量 `SNACK_DB_PATH` 覆盖；`data/` 已被 .gitignore 忽略）。首次启动自动建表；若 `users` 表为空，自动创建默认管理员 `admin` / `admin123`（README 必须提示登录后立即修改密码）。
+默认数据库文件：`data/app.db`（可用环境变量 `SNACK_DB_PATH` 覆盖；`data/` 已被 .gitignore 忽略）。首次启动自动建表。
+
+**admin 用户自动初始化（后端启动时执行，幂等）**：
+- 启动时若 `users` 表为空（或不存在名为 `admin` 的用户），自动创建默认管理员：用户名 `admin`、密码 `admin123`，`is_admin=1`。
+- 支持环境变量覆盖初始账号：`ADMIN_USERNAME`（默认 `admin`）、`ADMIN_PASSWORD`（默认 `admin123`）。
+- 幂等保证：每次启动都检查，**已存在同名用户则绝不覆盖/重置其密码**（即使用户后续改过密码）；初始化发生时向日志打印一行提示（含用户名，**不打印密码以外的敏感信息，密码仅在使用了非默认值时可提示“已通过 ADMIN_PASSWORD 设置”**）。
+- README 必须说明：自动初始化行为、环境变量、默认密码，以及登录后立即修改密码。
 
 ### users
 | 列 | 类型 | 说明 |
@@ -137,6 +143,6 @@
 
 ## 5. 各 lane 验证要求（必须在报告中附命令与输出摘要）
 
-- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
+- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
 - 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误。
 - 集成：`./build.sh` 一键成功；启动后端后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback。
