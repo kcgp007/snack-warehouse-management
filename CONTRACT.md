@@ -1,5 +1,11 @@
 # 零食仓库管理平台 — 集成契约（父级决策，子agent必须遵守）
 
+> **契约版本：v2**（2026-10-08 变更，取代 v1 对应条目）：
+> 1. `opened_at` / `finished_at` 由 `YYYY-MM-DDTHH:MM` 改为**纯日期 `YYYY-MM-DD`**（含存量数据迁移、校验、自动填充、前端 `date` 输入与展示）；
+> 2. `GET /api/locations` 新增查询参数 **`q`**，用于存放位置输入框“按已输入字符回显已有位置、可快选”的自动补全；
+> 3. 前端整体美化（视觉/交互一致性为验收项）。
+> v2 未提及的条目沿用 v1。
+
 ## 0. 总体架构（不可更改的约束）
 
 - **单体部署，无独立中间件**：不使用 Nginx / API 网关 / 独立认证服务。Rust 后端同时承担静态资源托管，Angular 编译产物直接由 Rust 进程提供服务。
@@ -68,12 +74,14 @@
 | location | TEXT NOT NULL | 存放位置，自由文本，如 `客厅/零食柜/第二层` |
 | purchase_date | TEXT | 购买日期 `YYYY-MM-DD`，可空 |
 | expiry_date | TEXT | 过期日期 `YYYY-MM-DD`，可空 |
-| opened_at | TEXT | 打开时间 `YYYY-MM-DDTHH:MM`（本地时间，无时区后缀），**非必填**，可空 |
-| finished_at | TEXT | 吃完时间 `YYYY-MM-DDTHH:MM`，可空 |
+| opened_at | TEXT | 打开日期 `YYYY-MM-DD`（服务器本地日期，**纯日期，无时间部分**），**非必填**，可空 |
+| finished_at | TEXT | 吃完日期 `YYYY-MM-DD`（纯日期），可空 |
 | status | TEXT NOT NULL DEFAULT 'in_stock' | 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完） |
 | notes | TEXT | 备注，可空 |
 | created_at | TEXT NOT NULL | RFC3339 UTC |
 | updated_at | TEXT NOT NULL | RFC3339 UTC |
+
+**存量数据迁移（v2 必做，幂等）**：v1 时代写入的 `opened_at`/`finished_at` 若为 `YYYY-MM-DDTHH:MM`（或更长格式），后端启动迁移时统一**截取前 10 位**规范化为 `YYYY-MM-DD`（非法且无法截取的值置 NULL）；迁移必须幂等，重复启动无副作用。启动后所有读写路径只接受/输出 `YYYY-MM-DD`。
 
 ## 2. 认证方式
 
@@ -99,20 +107,20 @@
 | `POST /api/snacks` | 请求体见 SnackInput；201 返回 Snack |
 | `PUT /api/snacks/{id}` | 请求体见 SnackInput；200 返回 Snack；不存在 404 |
 | `DELETE /api/snacks/{id}` | `204`；不存在 404 |
-| `GET /api/locations` | 去重后的存放位置字符串数组，按字典序 |
+| `GET /api/locations` | 去重后的存放位置字符串数组，按字典序。查询参数 **`q`（可选，v2 新增）**：按**子串包含**过滤（如 `q=客厅` 只返回含“客厅”的位置），`q` 缺失或为空串返回全部；专用于存放位置输入框的自动补全回显 |
 
 ```jsonc
-// SnackInput（POST/PUT 通用；日期为 YYYY-MM-DD，时间为 YYYY-MM-DDTHH:MM，均可为 null）
+// SnackInput（POST/PUT 通用；所有日期字段均为 YYYY-MM-DD，可为 null）
 { "name": "string(必填,非空)", "quantity": 1, "location": "string(必填,非空)",
   "purchase_date": "2026-01-05", "expiry_date": null, "notes": null,
-  // 以下为新增字段，均可省略；省略时 status 默认 'in_stock'，两个时间为 null
+  // 以下为新增字段，均可省略；省略时 status 默认 'in_stock'，两个日期为 null
   "status": "in_stock",          // 可选值 in_stock|opened|finished，非法值 400
-  "opened_at": null,              // 打开时间，非必填
-  "finished_at": null }           // 吃完时间
+  "opened_at": null,              // 打开日期 YYYY-MM-DD，非必填
+  "finished_at": null }           // 吃完日期 YYYY-MM-DD
 // Snack = SnackInput + { "id": 1, "created_at": "...", "updated_at": "..." }
 ```
-校验失败（缺字段、quantity<0、日期格式非 `YYYY-MM-DD`、时间格式非 `YYYY-MM-DDTHH:MM`、status 非法）→ 400 `{"error":...}`。
-服务端规则：`status="finished"` 且请求未带 `finished_at` 时，服务端自动填充当前本地时间；`finished_at` 仅在 `status="finished"` 时有意义（其他状态下携带可保存但不强制清除，前后端 UI 不应展示矛盾数据）。
+校验失败（缺字段、quantity<0、`purchase_date`/`expiry_date`/`opened_at`/`finished_at` 任一格式非 `YYYY-MM-DD`（v2 起**不再接受** `YYYY-MM-DDTHH:MM`，传入即 400）、status 非法）→ 400 `{"error":...}`。
+服务端规则：`status="finished"` 且请求未带 `finished_at` 时，服务端自动填充**当前本地日期 `YYYY-MM-DD`**；`finished_at` 仅在 `status="finished"` 时有意义（其他状态下携带可保存但不强制清除，前后端 UI 不应展示矛盾数据）。
 
 ### 过期提醒
 `GET /api/reminders` → 数组，元素为 Snack 字段（**含新字段 status/opened_at/finished_at**）再加：
@@ -135,12 +143,14 @@
 
 页面（standalone components + Router + guards）：
 1. **/login 登录页**：用户名/密码，错误提示。
-2. **/ 零食库存**（需登录）：表格列 = 名称、数量、存放位置、购买日期、过期日期、**过期状态徽章**、**生命周期状态徽章**、**打开时间**、**吃完时间**、备注、操作(编辑/删除)。
+2. **/ 零食库存**（需登录）：表格列 = 名称、数量、存放位置、购买日期、过期日期、**过期状态徽章**、**生命周期状态徽章**、**打开日期**、**吃完日期**、备注、操作(编辑/删除)。
    - 过期状态徽章（基于 expiry_date）：已过期=红、≤7天=橙、正常=绿、无过期日期=灰。
    - 生命周期状态徽章（status）：`in_stock`=蓝(未打开)、`opened`=紫(已打开)、`finished`=灰(已吃完)。
    - 顶部筛选：搜索框、存放位置下拉（来自 `/api/locations`）、过期状态筛选（请求参数 `expiry_status`）、生命周期状态筛选（请求参数 `status`)、"+ 添加零食"按钮（弹窗或表单页均可）。
-   - 编辑/添加表单字段含：状态下拉、打开时间（`datetime-local` 输入，**选填**）、吃完时间（`datetime-local`，选填；状态选"已吃完"且吃完时间留空时由后端自动填充）。
-   - 建议在操作列提供快捷动作："标记打开"（status→opened）与"标记吃完"（status→finished，finished_at 取当前时间），即一次 PUT 请求完成。
+   - 编辑/添加表单字段含：状态下拉、打开日期（**`type="date"` 输入，选填**）、吃完日期（`type="date"`，选填；状态选"已吃完"且吃完日期留空时由后端自动填充）。
+   - **存放位置输入框自动补全（v2 必做）**：输入过程中按**已输入字符**调用 `GET /api/locations?q=<已输入文本>`，在输入框下方回显匹配的已有位置列表（防抖即可，非强制），**点击可快选填入**；同时必须仍允许输入全新位置自由保存（自动补全只是回显建议，不做强制约束）。筛选栏的存放位置下拉沿用 `GET /api/locations`（无 `q`）。
+   - 建议在操作列提供快捷动作："标记打开"（status→opened，opened_at 取当前日期）与"标记吃完"（status→finished，finished_at 取当前日期），即一次 PUT 请求完成。
+   - **整体美化（v2 验收项）**：统一配色/字号/间距/圆角/阴影，徽章与按钮风格一致，表格行悬停与斑马纹，空状态与加载态提示，表单校验错误即时可见，桌面与窄屏（移动）布局均不破版；中文界面文案统一。
 3. **/reminders 过期提醒**（需登录）：按 status 分组/标色展示，显示剩余天数。
 4. **/users 账户管理**（需 admin guard，菜单项对非 admin 隐藏）：用户列表、添加账户、删除账户（含"不能删除自己"的错误展示）。
 5. **/change-password 修改密码**（需登录）。
@@ -154,6 +164,6 @@
 
 ## 5. 各 lane 验证要求（必须在报告中附命令与输出摘要）
 
-- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
-- 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误。
+- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
+- 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误；**`npm test`（vitest）全绿**。
 - 集成：`./build.sh` 一键编译成功；`./run.sh` 一键运行后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback→Ctrl-C 干净退出（进程无残留）。
