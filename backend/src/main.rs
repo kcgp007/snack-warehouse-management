@@ -4,7 +4,7 @@
 //! - `SNACK_DB_PATH`：SQLite 文件路径，默认 `data/app.db`（相对当前工作目录）；
 //! - `STATIC_DIR`：静态资源目录，默认编译期推导的 `backend/static`（与工作目录无关）；
 //! - `ADMIN_USERNAME` / `ADMIN_PASSWORD`：admin 自动初始化的覆盖账号（默认 admin / admin123）；
-//! - `HOST`（默认 `127.0.0.1`）/ `PORT`（默认 `3000`）。
+//! - `HOST`（默认 `0.0.0.0`，监听所有网卡以便局域网远程访问）/ `PORT`（默认 `3000`）。
 
 use std::path::PathBuf;
 
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = std::env::var("HOST")
         .ok()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "127.0.0.1".to_owned());
+        .unwrap_or_else(|| "0.0.0.0".to_owned());
     let port: u16 = std::env::var("PORT")
         .ok()
         .filter(|value| !value.is_empty())

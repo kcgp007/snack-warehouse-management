@@ -37,7 +37,7 @@ fi
 
 # 2) 环境变量默认值（沿用 backend/src/main.rs 语义：未设置/为空时取默认值）
 export PORT="${PORT:-3000}"
-export HOST="${HOST:-127.0.0.1}"
+export HOST="${HOST:-0.0.0.0}"
 export STATIC_DIR="${STATIC_DIR:-$ROOT_DIR/backend/static}"
 export SNACK_DB_PATH="${SNACK_DB_PATH:-data/app.db}"
 export ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
@@ -50,11 +50,24 @@ echo "[run] 启动后端：$BACKEND_BIN"
 echo "[run] 数据库：$SNACK_DB_PATH（STATIC_DIR=$STATIC_DIR）"
 "$BACKEND_BIN" &
 child=$!
-display_host="$HOST"
-if [ "$display_host" = "0.0.0.0" ] || [ "$display_host" = "::" ]; then
-  display_host="127.0.0.1"
+if [ "$HOST" = "0.0.0.0" ] || [ "$HOST" = "::" ]; then
+  # 通配地址：同时提示本机与局域网访问方式（IP 探测失败不影响运行）
+  lan_ip=""
+  if command -v hostname >/dev/null 2>&1; then
+    lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')" || lan_ip=""
+  fi
+  if [ -z "$lan_ip" ] && command -v ip >/dev/null 2>&1; then
+    lan_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')" || lan_ip=""
+  fi
+  echo "[run] 访问地址：http://127.0.0.1:${PORT}（本机）"
+  if [ -n "$lan_ip" ]; then
+    echo "[run] 局域网访问：http://${lan_ip}:${PORT}（其他设备；若无法访问请检查防火墙放行 ${PORT}/tcp）"
+  else
+    echo "[run] 局域网访问：http://<本机IP>:${PORT}（自动探测不可用；若无法访问请检查防火墙放行 ${PORT}/tcp）"
+  fi
+else
+  echo "[run] 访问地址：http://${HOST}:${PORT}"
 fi
-echo "[run] 访问地址：http://${display_host}:${PORT}"
 
 # 4) 等待子进程退出；若 wait 被信号陷阱打断（子进程仍在运行）则继续等待
 set +e
