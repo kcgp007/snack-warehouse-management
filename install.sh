@@ -127,11 +127,13 @@ if [ ! -x "$BIN_SRC" ]; then
   fi
   exit 1
 fi
+
 if [ ! -f "$STATIC_SRC/index.html" ]; then
   echo "错误：找不到前端静态资源 $STATIC_SRC/index.html" >&2
   echo "       请先运行 ./build.sh（或去掉 --no-build）。" >&2
   exit 1
 fi
+
 # 1) 服务运行用户（系统用户，无登录 shell）
 if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
@@ -168,7 +170,7 @@ chmod 750 "$DATA_DIR"
 if [ ! -f "$ENV_FILE" ]; then
   echo "[install] 生成配置文件：$ENV_FILE"
   install -m 600 /dev/null "$ENV_FILE"
-  cat > "$ENV_FILE" <<EOF
+  cat > "$ENV_FILE" <<ENV_EOF
 # 零食仓库管理平台 —— systemd 服务环境变量
 # 修改后执行：sudo systemctl restart $SERVICE_NAME
 HOST=0.0.0.0
@@ -177,7 +179,7 @@ STATIC_DIR=$INSTALL_DIR/static
 SNACK_DB_PATH=$DATA_DIR/app.db
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin123
-EOF
+ENV_EOF
   chmod 600 "$ENV_FILE"
   chown root:root "$ENV_FILE"
   echo "[install] ⚠️  默认管理员密码为 admin123，请登录后立即修改（或先编辑 $ENV_FILE 再重启服务）。"
@@ -202,7 +204,7 @@ case "$DB_PATH" in
 esac
 
 echo "[install] 写入 systemd 服务：$UNIT_FILE"
-cat > "$UNIT_FILE" <<EOF
+cat > "$UNIT_FILE" <<UNIT_EOF
 [Unit]
 Description=Snack Warehouse Management
 Documentation=file://$INSTALL_DIR/README.md
@@ -228,7 +230,7 @@ ReadWritePaths=$READ_WRITE_PATHS
 
 [Install]
 WantedBy=multi-user.target
-EOF
+UNIT_EOF
 chmod 644 "$UNIT_FILE"
 
 systemctl daemon-reload
