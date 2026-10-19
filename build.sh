@@ -38,8 +38,16 @@ cat > "$DIST_DIR/run.sh" <<'RUN_EOF'
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND_BIN="$ROOT_DIR/snack-warehouse-backend"
-STATIC_INDEX="$ROOT_DIR/static/index.html"
+# 自动定位编译产物：优先当前目录（dist/ 就地运行），回退到仓库布局
+# 路径由脚本自动推导，不依赖 STATIC_DIR / SNACK_DB_PATH 等环境变量
+if [ -x "$ROOT_DIR/snack-warehouse-backend" ]; then
+  BACKEND_BIN="$ROOT_DIR/snack-warehouse-backend"
+  STATIC_DIR="$ROOT_DIR/static"
+else
+  BACKEND_BIN="$ROOT_DIR/backend/target/debug/snack-warehouse-backend"
+  STATIC_DIR="$ROOT_DIR/backend/static"
+fi
+STATIC_INDEX="$STATIC_DIR/index.html"
 
 # 信号转发：把 INT/TERM 转给子进程所在的整个进程组（先于任何子步骤安装，
 # 避免自动编译期间收到信号留下孤儿 build.sh/npm）
@@ -69,13 +77,13 @@ if [ ! -f "$STATIC_INDEX" ] || [ ! -x "$BACKEND_BIN" ]; then
   fi
 fi
 
-# 2) 环境变量默认值（沿用 backend/src/main.rs 语义：未设置/为空时取默认值）
-export PORT="${PORT:-3000}"
-export HOST="${HOST:-0.0.0.0}"
-export STATIC_DIR="${STATIC_DIR:-$ROOT_DIR/static}"
-export SNACK_DB_PATH="${SNACK_DB_PATH:-data/app.db}"
-export ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-export ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+# 配置项可用环境变量覆盖（非路径）：PORT/HOST/ADMIN_USERNAME/ADMIN_PASSWORD
+# 核心路径（STATIC_DIR / SNACK_DB_PATH）由脚本自动推导，不读环境变量
+PORT="${PORT:-3000}"
+HOST="${HOST:-0.0.0.0}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+export PORT HOST ADMIN_USERNAME ADMIN_PASSWORD
 
 # 相对路径（如默认 data/app.db）统一相对仓库根目录解析
 cd "$ROOT_DIR"
@@ -128,10 +136,10 @@ cat > "$DIST_DIR/install.sh" <<'INSTALL_EOF'
 #   sudo ./install.sh --profile release   # 使用 release 版本后端二进制
 #   sudo ./install.sh --help
 #
-# 安装位置（可用环境变量覆盖）：
-#   INSTALL_DIR=<install.sh所在目录>  程序与静态资源（默认当前目录）
-#   DATA_DIR=<install.sh所在目录>/data   数据库目录（默认当前目录下的 data/）
-#   ENV_FILE=/etc/snack-warehouse.env      环境变量配置（root 600）
+# 安装位置（由脚本所在目录确定，不可通过环境变量覆盖）：
+#   程序与静态资源：install.sh所在目录
+#   数据库目录：install.sh所在目录下的 data/
+#   环境变量配置：/etc/snack-warehouse.env
 #   SERVICE_NAME=snack-warehouse           systemd 服务名
 #   RUN_USER=snack-warehouse               运行服务的系统用户
 set -euo pipefail
@@ -139,9 +147,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="${INSTALL_DIR:-$ROOT_DIR}"
-DATA_DIR="${DATA_DIR:-$ROOT_DIR/data}"
-ENV_FILE="${ENV_FILE:-/etc/snack-warehouse.env}"
+INSTALL_DIR="$ROOT_DIR"
+DATA_DIR="$ROOT_DIR/data"
+ENV_FILE="/etc/snack-warehouse.env"
 RUN_USER="${RUN_USER:-snack-warehouse}"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 PROFILE="${PROFILE:-debug}"
@@ -428,18 +436,20 @@ cat > "$DIST_DIR/uninstall.sh" <<'UNINSTALL_EOF'
 #   sudo ./uninstall.sh --purge --yes   # 彻底删除且不再询问
 #   sudo ./uninstall.sh --help
 #
-# 可通过环境变量覆盖安装时使用的路径（需与安装时一致）：
-#   INSTALL_DIR=<install.sh所在目录>
-#   DATA_DIR=<install.sh所在目录>/data
-#   ENV_FILE=/etc/snack-warehouse.env
-#   SERVICE_NAME=snack-warehouse
-#   RUN_USER=snack-warehouse
+# 安装位置（由脚本所在目录确定，不可通过环境变量覆盖）：
+#   程序与静态资源：install.sh所在目录
+#   数据库目录：install.sh所在目录下的 data/
+#   环境变量配置：/etc/snack-warehouse.env
+#   SERVICE_NAME=snack-warehouse           systemd 服务名
+#   RUN_USER=snack-warehouse               运行服务的系统用户
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-DATA_DIR="${DATA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data}"
-ENV_FILE="${ENV_FILE:-/etc/snack-warehouse.env}"
+INSTALL_DIR="$ROOT_DIR"
+DATA_DIR="$ROOT_DIR/data"
+ENV_FILE="/etc/snack-warehouse.env"
 RUN_USER="${RUN_USER:-snack-warehouse}"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 

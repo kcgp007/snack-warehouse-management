@@ -17,9 +17,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-DATA_DIR="${DATA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data}"
+SERVICE_NAME="snack-warehouse"
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_DIR="$INSTALL_DIR/data"
 ENV_FILE="${ENV_FILE:-/etc/snack-warehouse.env}"
 RUN_USER="${RUN_USER:-snack-warehouse}"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"

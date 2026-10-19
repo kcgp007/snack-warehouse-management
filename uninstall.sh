@@ -7,17 +7,15 @@
 #   sudo ./uninstall.sh --purge --yes   # 彻底删除且不再询问
 #   sudo ./uninstall.sh --help
 #
-# 可通过环境变量覆盖安装时使用的路径（需与安装时一致）：
-#   INSTALL_DIR=/opt/snack-warehouse
-#   DATA_DIR=/var/lib/snack-warehouse
+# 核心路径由脚本自动推导（脚本所在目录及其 data/ 子目录）：
 #   ENV_FILE=/etc/snack-warehouse.env
 #   SERVICE_NAME=snack-warehouse
 #   RUN_USER=snack-warehouse
 set -euo pipefail
 
-SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/snack-warehouse}"
-DATA_DIR="${DATA_DIR:-/var/lib/snack-warehouse}"
+SERVICE_NAME="snack-warehouse"
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_DIR="$INSTALL_DIR/data"
 ENV_FILE="${ENV_FILE:-/etc/snack-warehouse.env}"
 RUN_USER="${RUN_USER:-snack-warehouse}"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
