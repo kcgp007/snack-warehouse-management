@@ -22,6 +22,14 @@ rm -rf "$STATIC_DIR"
 mkdir -p "$STATIC_DIR"
 cp -R "$BROWSER_DIR/." "$STATIC_DIR/"
 
+# 将运行/安装/卸载脚本一并随编译产物输出，便于部署与系统级安装
+for script in run.sh install.sh uninstall.sh; do
+  cp -f "$ROOT_DIR/$script" "$STATIC_DIR/$script"
+  chmod 755 "$STATIC_DIR/$script"
+done
+
+echo "[build] 部署脚本已就绪：$STATIC_DIR/{run.sh,install.sh,uninstall.sh}"
+
 if [ ! -f "$STATIC_DIR/index.html" ]; then
   echo "错误：$STATIC_DIR/index.html 不存在，静态资源拷贝失败" >&2
   exit 1
@@ -35,4 +43,5 @@ cargo build
 echo "编译成功"
 echo "下一步：运行 ./run.sh（默认 http://127.0.0.1:3000，Ctrl-C 停止）"
 echo "  ./run.sh"
+echo "部署脚本（已随产物输出）：$STATIC_DIR/{run.sh,install.sh,uninstall.sh}"
 echo "手动方式（可选）：SNACK_DB_PATH=data/app.db ./backend/target/debug/snack-warehouse-backend"
