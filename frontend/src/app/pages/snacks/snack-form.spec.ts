@@ -15,34 +15,35 @@ function baseForm(overrides: Partial<SnackFormModel> = {}): SnackFormModel {
   };
 }
 
-const TIME_FORMAT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const DATE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
 
 describe('lifecycleTimes', () => {
-  it('clears both timestamps for in_stock（未打开不得带打开/吃完时间）', () => {
-    expect(lifecycleTimes('in_stock', '2024-01-02T10:00', '2024-01-03T11:00')).toEqual({
+  it('clears both dates for in_stock（未打开不得带打开/吃完日期）', () => {
+    expect(lifecycleTimes('in_stock', '2024-01-02', '2024-01-03')).toEqual({
       opened_at: null,
       finished_at: null,
     });
   });
 
-  it('keeps opened_at and clears finished_at for opened（已打开不得带吃完时间）', () => {
-    expect(lifecycleTimes('opened', '2024-01-02T10:00', '2024-01-03T11:00')).toEqual({
-      opened_at: '2024-01-02T10:00',
+  it('keeps opened_at and clears finished_at for opened（已打开不得带吃完日期）', () => {
+    expect(lifecycleTimes('opened', '2024-01-02', '2024-01-03')).toEqual({
+      opened_at: '2024-01-02',
       finished_at: null,
     });
   });
 
-  it('keeps both timestamps for finished（已吃完保留打开与吃完时间）', () => {
-    expect(lifecycleTimes('finished', '2024-01-02T10:00', '2024-01-03T11:00')).toEqual({
-      opened_at: '2024-01-02T10:00',
-      finished_at: '2024-01-03T11:00',
+  it('keeps both dates for finished（已吃完保留打开与吃完日期）', () => {
+    expect(lifecycleTimes('finished', '2024-01-02', '2024-01-03')).toEqual({
+      opened_at: '2024-01-02',
+      finished_at: '2024-01-03',
     });
   });
 
-  it('autofills finished_at for finished when it is empty', () => {
+  it('autofills finished_at for finished when it is empty（纯日期）', () => {
     const result = lifecycleTimes('finished', null, '');
     expect(result.opened_at).toBeNull();
-    expect(result.finished_at).toMatch(TIME_FORMAT);
+    expect(result.finished_at).toMatch(DATE_FORMAT);
+    expect(result.finished_at).not.toContain('T');
   });
 
   it('normalizes empty strings to null', () => {
@@ -51,12 +52,12 @@ describe('lifecycleTimes', () => {
 });
 
 describe('formToSnackInput', () => {
-  it('drops stale timestamps when editing 已吃完 → 未打开（表格不再出现矛盾行）', () => {
-    // openEdit 从 finished 零食载入的表单：两个时间都已填写
+  it('drops stale dates when editing 已吃完 → 未打开（表格不再出现矛盾行）', () => {
+    // openEdit 从 finished 零食载入的表单：两个日期都已填写
     const form = baseForm({
       status: 'finished',
-      opened_at: '2024-01-02T10:00',
-      finished_at: '2024-01-03T11:00',
+      opened_at: '2024-01-02',
+      finished_at: '2024-01-03',
     });
     const saved = formToSnackInput({ ...form, status: 'in_stock' });
     expect(saved.status).toBe('in_stock');
@@ -68,11 +69,11 @@ describe('formToSnackInput', () => {
     const saved = formToSnackInput(
       baseForm({
         status: 'opened',
-        opened_at: '2024-01-02T10:00',
-        finished_at: '2024-01-03T11:00',
+        opened_at: '2024-01-02',
+        finished_at: '2024-01-03',
       }),
     );
-    expect(saved.opened_at).toBe('2024-01-02T10:00');
+    expect(saved.opened_at).toBe('2024-01-02');
     expect(saved.finished_at).toBeNull();
   });
 
@@ -80,14 +81,15 @@ describe('formToSnackInput', () => {
     const kept = formToSnackInput(
       baseForm({
         status: 'finished',
-        opened_at: '2024-01-02T10:00',
-        finished_at: '2024-01-03T11:00',
+        opened_at: '2024-01-02',
+        finished_at: '2024-01-03',
       }),
     );
-    expect(kept.finished_at).toBe('2024-01-03T11:00');
+    expect(kept.finished_at).toBe('2024-01-03');
 
     const autofilled = formToSnackInput(baseForm({ status: 'finished' }));
-    expect(autofilled.finished_at).toMatch(TIME_FORMAT);
+    expect(autofilled.finished_at).toMatch(DATE_FORMAT);
+    expect(autofilled.finished_at).not.toContain('T');
   });
 
   it('trims text fields and parses quantity', () => {

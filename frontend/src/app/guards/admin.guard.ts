@@ -10,5 +10,9 @@ export const adminGuard: CanActivateFn = async () => {
     return router.createUrlTree(['/login']);
   }
   const user = await auth.ensureUser();
+  if (!auth.token()) {
+    // 401 时拦截器已清理会话并跳转 /login，这里返回 false 避免二次导航。
+    return false;
+  }
   return user && user.is_admin ? true : router.createUrlTree(['/']);
 };

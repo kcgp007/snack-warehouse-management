@@ -9,11 +9,37 @@ export class ReminderService {
 
   readonly reminders = signal<Reminder[]>([]);
   readonly count = computed(() => this.reminders().length);
+  readonly loading = signal(false);
+  readonly error = signal('');
+
+  /** 请求序号：导航/操作触发的并发刷新只接受最后一次结果。 */
+  private seq = 0;
 
   refresh(): void {
+    const seq = ++this.seq;
+    this.loading.set(true);
     this.http.get<Reminder[]>('/api/reminders').subscribe({
-      next: (list) => this.reminders.set(list),
-      error: () => undefined, // 401 由拦截器统一处理
+      next: (list) => {
+        if (seq !== this.seq) {
+          return;
+        }
+        this.reminders.set(list);
+        this.loading.set(false);
+        this.error.set('');
+      },
+      error: () => {
+        if (seq !== this.seq) {
+          return;
+        }
+        this.loading.set(false);
+        // 401 由拦截器统一处理；这里只提示非鉴权类失败。
+        this.error.set('加载过期提醒失败，请稍后重试');
+      },
     });
+  }
+
+  retry(): void {
+    this.error.set('');
+    this.refresh();
   }
 }

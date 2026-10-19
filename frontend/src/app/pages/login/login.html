@@ -7,10 +7,15 @@
       <input
         name="username"
         autocomplete="username"
+        [class.invalid]="touched().username && fieldError('username')"
         [ngModel]="username()"
         (ngModelChange)="username.set($event)"
+        (blur)="markTouched('username')"
         placeholder="请输入用户名"
       />
+      @if (touched().username && fieldError('username')) {
+        <p class="field-error" role="alert">{{ fieldError('username') }}</p>
+      }
     </label>
     <label class="field">
       <span>密码</span>
@@ -18,10 +23,15 @@
         name="password"
         type="password"
         autocomplete="current-password"
+        [class.invalid]="touched().password && fieldError('password')"
         [ngModel]="password()"
         (ngModelChange)="password.set($event)"
+        (blur)="markTouched('password')"
         placeholder="请输入密码"
       />
+      @if (touched().password && fieldError('password')) {
+        <p class="field-error" role="alert">{{ fieldError('password') }}</p>
+      }
     </label>
     @if (error()) {
       <div class="form-error">{{ error() }}</div>

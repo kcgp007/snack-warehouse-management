@@ -15,6 +15,7 @@ export class Login {
   protected readonly password = signal('');
   protected readonly error = signal('');
   protected readonly submitting = signal(false);
+  protected readonly touched = signal({ username: false, password: false });
 
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
@@ -30,11 +31,25 @@ export class Login {
     }
   }
 
+  protected markTouched(field: 'username' | 'password'): void {
+    this.touched.update((value) => ({ ...value, [field]: true }));
+  }
+
+  protected fieldError(field: 'username' | 'password'): string {
+    if (field === 'username' && !this.username().trim()) {
+      return '请输入用户名';
+    }
+    if (field === 'password' && !this.password()) {
+      return '请输入密码';
+    }
+    return '';
+  }
+
   protected submit(): void {
     const username = this.username().trim();
     const password = this.password();
-    if (!username || !password) {
-      this.error.set('请输入用户名和密码');
+    this.touched.set({ username: true, password: true });
+    if (this.fieldError('username') || this.fieldError('password')) {
       return;
     }
     this.error.set('');

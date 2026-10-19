@@ -16,23 +16,49 @@ export class ChangePassword {
   protected readonly error = signal('');
   protected readonly notice = signal('');
   protected readonly submitting = signal(false);
+  protected readonly touched = signal({
+    oldPassword: false,
+    newPassword: false,
+    confirmPassword: false,
+  });
 
   private readonly auth = inject(AuthService);
+
+  protected markTouched(field: 'oldPassword' | 'newPassword' | 'confirmPassword'): void {
+    this.touched.update((value) => ({ ...value, [field]: true }));
+  }
+
+  protected fieldError(field: 'oldPassword' | 'newPassword' | 'confirmPassword'): string {
+    if (field === 'oldPassword' && !this.oldPassword()) {
+      return '请输入原密码';
+    }
+    if (field === 'newPassword') {
+      if (!this.newPassword()) {
+        return '请输入新密码';
+      }
+      if (this.newPassword().length < 6) {
+        return '新密码至少 6 位字符';
+      }
+    }
+    if (field === 'confirmPassword') {
+      if (!this.confirmPassword()) {
+        return '请再次输入新密码';
+      }
+      if (this.newPassword() !== this.confirmPassword()) {
+        return '两次输入的新密码不一致';
+      }
+    }
+    return '';
+  }
 
   protected submit(): void {
     const oldPassword = this.oldPassword();
     const newPassword = this.newPassword();
-    const confirmPassword = this.confirmPassword();
-    if (!oldPassword || !newPassword) {
-      this.error.set('请输入原密码和新密码');
-      return;
-    }
-    if (newPassword.length < 6) {
-      this.error.set('新密码至少 6 位字符');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      this.error.set('两次输入的新密码不一致');
+    this.touched.set({ oldPassword: true, newPassword: true, confirmPassword: true });
+    const invalid = (['oldPassword', 'newPassword', 'confirmPassword'] as const).find(
+      (field) => this.fieldError(field) !== '',
+    );
+    if (invalid) {
       return;
     }
     this.error.set('');

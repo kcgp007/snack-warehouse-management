@@ -41,12 +41,15 @@
   <div class="banner notice">{{ notice() }}</div>
 }
 
-@if (loading()) {
-  <p class="muted">加载中…</p>
+@if (loading() && snacks().length === 0) {
+  <div class="loading-state" role="status">
+    <span class="spinner" aria-hidden="true"></span>
+    正在加载零食…
+  </div>
 }
 
-<div class="table-wrap">
-  <table class="data">
+<div class="table-wrap" [class.is-loading]="loading()">
+  <table class="data snacks-table">
     <thead>
       <tr>
         <th>名称</th>
@@ -56,8 +59,8 @@
         <th>过期日期</th>
         <th>过期状态</th>
         <th>生命周期</th>
-        <th>打开时间</th>
-        <th>吃完时间</th>
+        <th>打开日期</th>
+        <th>吃完日期</th>
         <th>备注</th>
         <th class="col-ops">操作</th>
       </tr>
@@ -80,8 +83,8 @@
               lifecycleBadgeOf(snack).label
             }}</span>
           </td>
-          <td>{{ timeCellOf(snack, 'opened') }}</td>
-          <td>{{ timeCellOf(snack, 'finished') }}</td>
+          <td>{{ dateCellOf(snack, 'opened') }}</td>
+          <td>{{ dateCellOf(snack, 'finished') }}</td>
           <td class="notes">{{ snack.notes ?? '—' }}</td>
           <td class="col-ops">
             @if (snack.status === 'in_stock') {
@@ -89,10 +92,10 @@
                 class="btn small"
                 type="button"
                 title="标记打开"
-                [disabled]="quickBusy()"
+                [disabled]="quickBusyId() === snack.id"
                 (click)="markOpened(snack)"
               >
-                标记打开
+                {{ quickBusyId() === snack.id ? '处理中…' : '标记打开' }}
               </button>
             }
             @if (snack.status !== 'finished') {
@@ -100,10 +103,10 @@
                 class="btn small"
                 type="button"
                 title="标记吃完"
-                [disabled]="quickBusy()"
+                [disabled]="quickBusyId() === snack.id"
                 (click)="markFinished(snack)"
               >
-                标记吃完
+                {{ quickBusyId() === snack.id ? '处理中…' : '标记吃完' }}
               </button>
             }
             <button class="btn small" type="button" (click)="openEdit(snack)">编辑</button>
@@ -112,7 +115,9 @@
         </tr>
       } @empty {
         <tr>
-          <td class="empty" colspan="11">暂无零食，点击“+ 添加零食”创建第一条记录。</td>
+          <td class="empty" colspan="11">
+            {{ loading() ? '正在加载…' : '暂无零食，点击“+ 添加零食”创建第一条记录。' }}
+          </td>
         </tr>
       }
     </tbody>
@@ -120,19 +125,31 @@
 </div>
 
 @if (modalOpen()) {
-  <div class="modal-backdrop" (click)="closeModal()">
-    <div class="modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
-      <h3>{{ editing() ? '编辑零食' : '添加零食' }}</h3>
+  <div class="modal-backdrop" (click)="!saving() && closeModal()">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="snack-form-title"
+      (click)="$event.stopPropagation()"
+    >
+      <h3 id="snack-form-title">{{ editing() ? '编辑零食' : '添加零食' }}</h3>
       <form (ngSubmit)="save()">
         <label class="field">
           <span>名称 *</span>
           <input
             name="name"
             required
+            [class.invalid]="touched().name && fieldError('name')"
+            [attr.aria-invalid]="touched().name && fieldError('name') ? 'true' : null"
             [ngModel]="form().name"
             (ngModelChange)="patch({ name: $event })"
+            (blur)="markTouched('name')"
             placeholder="如 薯片"
           />
+          @if (touched().name && fieldError('name')) {
+            <p class="field-error" role="alert">{{ fieldError('name') }}</p>
+          }
         </label>
         <div class="field-row">
           <label class="field">
@@ -143,19 +160,60 @@
               min="0"
               step="1"
               required
+              [class.invalid]="touched().quantity && fieldError('quantity')"
+              [attr.aria-invalid]="touched().quantity && fieldError('quantity') ? 'true' : null"
               [ngModel]="form().quantity"
               (ngModelChange)="onQuantityChange($event)"
+              (blur)="markTouched('quantity')"
             />
+            @if (touched().quantity && fieldError('quantity')) {
+              <p class="field-error" role="alert">{{ fieldError('quantity') }}</p>
+            }
           </label>
-          <label class="field">
+          <label class="field location-field">
             <span>存放位置 *</span>
             <input
               name="location"
               required
+              autocomplete="off"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-controls="location-suggestions"
+              [attr.aria-expanded]="suggestionsOpen() && locationSuggestions().length > 0"
+              [class.invalid]="touched().location && fieldError('location')"
+              [attr.aria-invalid]="touched().location && fieldError('location') ? 'true' : null"
               [ngModel]="form().location"
-              (ngModelChange)="patch({ location: $event })"
+              (ngModelChange)="onLocationInput($event)"
+              (focus)="onLocationFocus()"
+              (blur)="onLocationBlur(); markTouched('location')"
+              (keydown)="onLocationKeydown($event)"
               placeholder="如 客厅/零食柜/第二层"
             />
+            @if (touched().location && fieldError('location')) {
+              <p class="field-error" role="alert">{{ fieldError('location') }}</p>
+            }
+            @if (suggestionsOpen() && locationSuggestions().length) {
+              <ul
+                id="location-suggestions"
+                class="suggestions"
+                role="listbox"
+                aria-label="已有存放位置"
+              >
+                @for (loc of locationSuggestions(); track loc; let i = $index) {
+                  <li>
+                    <button
+                      type="button"
+                      role="option"
+                      [attr.aria-selected]="i === activeSuggestion()"
+                      [class.active]="i === activeSuggestion()"
+                      (mousedown)="$event.preventDefault(); pickLocation(loc)"
+                    >
+                      {{ loc }}
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
           </label>
         </div>
         <div class="field-row">
@@ -192,25 +250,25 @@
             </select>
           </label>
           <label class="field">
-            <span>打开时间（选填）</span>
+            <span>打开日期（选填）</span>
             <input
               name="opened_at"
-              type="datetime-local"
+              type="date"
               [ngModel]="form().opened_at"
               (ngModelChange)="patch({ opened_at: $event })"
             />
           </label>
           <label class="field">
-            <span>吃完时间（选填）</span>
+            <span>吃完日期（选填）</span>
             <input
               name="finished_at"
-              type="datetime-local"
+              type="date"
               [ngModel]="form().finished_at"
               (ngModelChange)="patch({ finished_at: $event })"
             />
           </label>
         </div>
-        <p class="form-hint">状态选“已吃完”且吃完时间留空时，将自动填入当前时间。</p>
+        <p class="form-hint">状态选“已吃完”且吃完日期留空时，将自动填入当前日期。</p>
         <label class="field">
           <span>备注</span>
           <textarea
@@ -225,12 +283,42 @@
           <div class="form-error">{{ formError() }}</div>
         }
         <div class="modal-actions">
-          <button class="btn" type="button" (click)="closeModal()">取消</button>
+          <button class="btn" type="button" [disabled]="saving()" (click)="closeModal()">
+            取消
+          </button>
           <button class="btn primary" type="submit" [disabled]="saving()">
             {{ saving() ? '保存中…' : '保存' }}
           </button>
         </div>
       </form>
+    </div>
+  </div>
+}
+
+@if (pendingDelete(); as target) {
+  <div class="modal-backdrop" (click)="cancelDelete()">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-dialog-title"
+      (click)="$event.stopPropagation()"
+    >
+      <h3 id="delete-dialog-title">删除零食</h3>
+      <p class="muted">确定删除「{{ target.name }}」吗？此操作不可撤销。</p>
+      <div class="modal-actions">
+        <button class="btn" type="button" [disabled]="quickBusyId() !== null" (click)="cancelDelete()">
+          取消
+        </button>
+        <button
+          class="btn danger"
+          type="button"
+          [disabled]="quickBusyId() !== null"
+          (click)="confirmDelete()"
+        >
+          {{ quickBusyId() !== null ? '删除中…' : '删除' }}
+        </button>
+      </div>
     </div>
   </div>
 }

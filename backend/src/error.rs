@@ -41,6 +41,10 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, message)
     }
 
+    pub fn method_not_allowed(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::METHOD_NOT_ALLOWED, message)
+    }
+
     pub fn internal() -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "服务器内部错误")
     }

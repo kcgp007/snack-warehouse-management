@@ -22,8 +22,10 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   return next(outgoing).pipe(
     catchError((err: unknown) => {
       if (err instanceof HttpErrorResponse && err.status === 401 && !isLoginRequest) {
+        // 并发 401 只跳转一次：首个响应清掉 token 后，后续响应不再重复导航。
+        const hadSession = auth.token() !== null;
         auth.clearSession();
-        if (!router.url.startsWith('/login')) {
+        if (hadSession && !router.url.startsWith('/login')) {
           void router.navigate(['/login']);
         }
       }

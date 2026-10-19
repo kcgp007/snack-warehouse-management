@@ -67,6 +67,8 @@ pub fn build_app(cfg: AppConfig) -> Result<Router, Box<dyn std::error::Error>> {
         // 账户管理（中间件强制 is_admin=1，否则 403）
         .route("/users", get(users::list).post(users::create))
         .route("/users/{id}", delete(users::remove))
+        // 路径存在但方法不支持 → 统一 405 JSON
+        .method_not_allowed_fallback(auth::api_method_not_allowed)
         // 未匹配的 /api/* → 统一 404 JSON（带有效 token 时）
         .fallback(auth::api_not_found);
 
@@ -75,7 +77,10 @@ pub fn build_app(cfg: AppConfig) -> Result<Router, Box<dyn std::error::Error>> {
         // 非 /api 路径 → 静态资源 + SPA fallback（契约 §0）
         .fallback(static_files::spa_fallback)
         // 认证/授权中间件（契约 §2）
-        .layer(middleware::from_fn_with_state(state.clone(), auth::require_auth))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ))
         .with_state(state);
 
     Ok(app)

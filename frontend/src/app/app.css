@@ -1,13 +1,16 @@
 .topbar {
-  background: #1f2933;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: linear-gradient(90deg, #17233a, #1f3557);
   color: #fff;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.25);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.22);
 }
 
 .topbar-inner {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 10px 16px;
+  padding: 10px 18px;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -18,6 +21,7 @@
   color: #fff;
   font-weight: 700;
   font-size: 16px;
+  letter-spacing: 0.02em;
 }
 
 .nav {
@@ -28,20 +32,21 @@
 }
 
 .nav a {
-  color: #cbd2d9;
-  padding: 6px 10px;
-  border-radius: 6px;
   position: relative;
+  padding: 6px 11px;
+  border-radius: 8px;
+  color: #cbd2d9;
 }
 
 .nav a:hover {
   color: #fff;
   background: rgba(255, 255, 255, 0.08);
+  text-decoration: none;
 }
 
 .nav a.active {
   color: #fff;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .nav-badge {
@@ -61,7 +66,7 @@
 .topbar-user {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .username {
@@ -72,5 +77,36 @@
 .page {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 20px 16px 48px;
+  padding: 24px 18px 52px;
+}
+
+@media (max-width: 640px) {
+  .topbar-inner {
+    gap: 10px 14px;
+    padding: 9px 13px;
+  }
+
+  .brand {
+    font-size: 15px;
+  }
+
+  .nav {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .nav a {
+    white-space: nowrap;
+  }
+
+  .topbar-user {
+    margin-left: auto;
+  }
+
+  .username {
+    display: none;
+  }
 }

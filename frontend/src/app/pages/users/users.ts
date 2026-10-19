@@ -20,6 +20,14 @@ export class Users {
   protected readonly newUsername = signal('');
   protected readonly newPassword = signal('');
   protected readonly adding = signal(false);
+  protected readonly removing = signal(false);
+  /** 逐字段校验：blur 后才显示错误，提交时统一标记。 */
+  protected readonly touched = signal<Record<'username' | 'password', boolean>>({
+    username: false,
+    password: false,
+  });
+  /** 待删除的账户（非空时展示删除确认弹窗，替代 window.confirm）。 */
+  protected readonly pendingDelete = signal<User | null>(null);
 
   protected readonly currentUserId = inject(AuthService).user;
 
@@ -45,10 +53,10 @@ export class Users {
   }
 
   protected add(): void {
+    this.touched.set({ username: true, password: true });
     const username = this.newUsername().trim();
     const password = this.newPassword();
     if (!username || !password) {
-      this.error.set('请输入用户名和密码');
       return;
     }
     this.error.set('');
@@ -59,6 +67,7 @@ export class Users {
         this.adding.set(false);
         this.newUsername.set('');
         this.newPassword.set('');
+        this.touched.set({ username: false, password: false });
         this.notice.set(`已添加账户「${user.username}」`);
         this.load();
       },
@@ -69,18 +78,65 @@ export class Users {
     });
   }
 
+  protected markTouched(field: 'username' | 'password'): void {
+    this.touched.update((t) => ({ ...t, [field]: true }));
+  }
+
+  /** 当前字段的即时校验错误；无错误返回 ''。 */
+  protected fieldError(field: 'username' | 'password'): string {
+    if (field === 'username' && !this.newUsername().trim()) {
+      return '请输入用户名';
+    }
+    if (field === 'password' && !this.newPassword()) {
+      return '请输入初始密码';
+    }
+    return '';
+  }
+
+  /** RFC3339 → 本地可读时间（用户页不再展示原始 UTC 字符串）。 */
+  protected displayDate(value: string | null | undefined): string {
+    if (!value) {
+      return '—';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
   protected remove(user: User): void {
-    if (!window.confirm(`确定删除账户「${user.username}」吗？`)) {
+    this.pendingDelete.set(user);
+  }
+
+  protected cancelDelete(): void {
+    this.pendingDelete.set(null);
+  }
+
+  protected confirmDelete(): void {
+    const user = this.pendingDelete();
+    if (!user || this.removing()) {
       return;
     }
+    this.removing.set(true);
     this.error.set('');
     this.notice.set('');
     this.userService.remove(user.id).subscribe({
       next: () => {
+        this.removing.set(false);
+        this.pendingDelete.set(null);
         this.notice.set(`已删除账户「${user.username}」`);
         this.load();
       },
       error: (err: unknown) => {
+        this.removing.set(false);
+        this.pendingDelete.set(null);
         // 服务端会拒绝“不能删除当前登录账户”，这里原样展示错误信息
         this.error.set(apiErrorMessage(err, '删除账户失败'));
       },

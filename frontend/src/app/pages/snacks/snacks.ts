@@ -1,15 +1,15 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { forkJoin, Subject } from 'rxjs';
-import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
+import { forkJoin, of, Subject } from 'rxjs';
+import { catchError, debounceTime, distinctUntilChanged, switchMap } from 'rxjs/operators';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { apiErrorMessage } from '../../api-error';
 import { ExpiryStatusFilter, LifecycleStatusFilter, Snack, SnackInput } from '../../models';
 import {
   LifecycleBadge,
   SnackBadge,
-  currentLocalMinute,
+  currentLocalDate,
   lifecycleBadge,
   snackBadgeOf,
 } from '../../snack-status';
@@ -68,14 +68,30 @@ export class Snacks {
   protected readonly editing = signal<Snack | null>(null);
   protected readonly form = signal<SnackFormModel>(emptyForm());
   protected readonly formError = signal('');
+  protected readonly touched = signal<Record<'name' | 'quantity' | 'location', boolean>>({
+    name: false,
+    quantity: false,
+    location: false,
+  });
   protected readonly saving = signal(false);
-  protected readonly quickBusy = signal(false);
+  /** 正在执行快捷动作的零食 id（仅禁用该行按钮，其他行仍可操作）。 */
+  protected readonly quickBusyId = signal<number | null>(null);
+  /** 待删除的零食（非空时展示删除确认弹窗，替代 window.confirm）。 */
+  protected readonly pendingDelete = signal<Snack | null>(null);
+
+  /** 位置输入自动补全（契约 v2）：按已输入字符防抖请求 GET /api/locations?q=。 */
+  protected readonly locationSuggestions = signal<string[]>([]);
+  protected readonly suggestionsOpen = signal(false);
+  protected readonly activeSuggestion = signal(-1);
 
   protected readonly reminderCount = inject(ReminderService).count;
 
   private readonly snackService = inject(SnackService);
   private readonly reminders = inject(ReminderService);
   private readonly searchChange = new Subject<string>();
+  private readonly locationInput = new Subject<string>();
+  /** 列表请求序号：筛选快速切换时丢弃过期响应，避免旧数据覆盖新数据。 */
+  private loadSeq = 0;
 
   constructor() {
     this.searchChange
@@ -84,10 +100,22 @@ export class Snacks {
         this.q.set(value);
         this.load();
       });
+    this.locationInput
+      .pipe(
+        debounceTime(250),
+        switchMap((term) =>
+          this.snackService
+            .locations(term)
+            .pipe(catchError(() => of<string[]>([]))),
+        ),
+        takeUntilDestroyed(),
+      )
+      .subscribe((locations) => this.locationSuggestions.set(locations));
     this.load();
   }
 
   protected load(): void {
+    const seq = ++this.loadSeq;
     this.loading.set(true);
     forkJoin({
       snacks: this.snackService.list({
@@ -99,12 +127,18 @@ export class Snacks {
       locations: this.snackService.locations(),
     }).subscribe({
       next: ({ snacks, locations }) => {
+        if (seq !== this.loadSeq) {
+          return;
+        }
         this.snacks.set(snacks);
         this.locations.set(locations);
         this.loading.set(false);
         this.error.set('');
       },
       error: (err: unknown) => {
+        if (seq !== this.loadSeq) {
+          return;
+        }
         this.loading.set(false);
         this.error.set(apiErrorMessage(err, '加载零食列表失败'));
       },
@@ -138,7 +172,9 @@ export class Snacks {
     this.editing.set(null);
     this.form.set(emptyForm());
     this.formError.set('');
+    this.touched.set({ name: false, quantity: false, location: false });
     this.notice.set('');
+    this.resetLocationSuggestions();
     this.modalOpen.set(true);
   }
 
@@ -156,11 +192,14 @@ export class Snacks {
       finished_at: snack.finished_at ?? '',
     });
     this.formError.set('');
+    this.touched.set({ name: false, quantity: false, location: false });
     this.notice.set('');
+    this.resetLocationSuggestions();
     this.modalOpen.set(true);
   }
 
   protected closeModal(): void {
+    this.resetLocationSuggestions();
     this.modalOpen.set(false);
   }
 
@@ -168,29 +207,109 @@ export class Snacks {
     this.form.update((value) => ({ ...value, ...part }));
   }
 
+  /** 位置输入：更新表单并按字符请求补全建议。 */
+  protected onLocationInput(value: string): void {
+    this.patch({ location: value });
+    this.activeSuggestion.set(-1);
+    this.suggestionsOpen.set(true);
+    this.locationInput.next(value);
+  }
+
+  /** 聚焦位置输入框时展示已有位置（空串 = 全部）。 */
+  protected onLocationFocus(): void {
+    this.activeSuggestion.set(-1);
+    this.suggestionsOpen.set(true);
+    this.locationInput.next(this.form().location);
+  }
+
+  protected onLocationBlur(): void {
+    this.suggestionsOpen.set(false);
+    this.activeSuggestion.set(-1);
+  }
+
+  /** 键盘导航：↑/↓ 选择，Enter 确认，Esc 关闭。 */
+  protected onLocationKeydown(event: KeyboardEvent): void {
+    if (!this.suggestionsOpen()) {
+      return;
+    }
+    const count = this.locationSuggestions().length;
+    if (event.key === 'Escape') {
+      this.onLocationBlur();
+      return;
+    }
+    if (count === 0) {
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.activeSuggestion.update((index) => (index + 1) % count);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      this.activeSuggestion.update((index) => (index <= 0 ? count - 1 : index - 1));
+    } else if (event.key === 'Enter') {
+      const active = this.activeSuggestion();
+      if (active >= 0) {
+        event.preventDefault();
+        this.pickLocation(this.locationSuggestions()[active]);
+      }
+    }
+  }
+
+  /** 点击建议只回填位置，仍允许自由输入新位置。 */
+  protected pickLocation(location: string): void {
+    this.patch({ location });
+    this.resetLocationSuggestions();
+  }
+
+  private resetLocationSuggestions(): void {
+    this.suggestionsOpen.set(false);
+    this.activeSuggestion.set(-1);
+    this.locationSuggestions.set([]);
+  }
+
   protected onQuantityChange(value: unknown): void {
     this.patch({ quantity: value == null ? '' : String(value) });
   }
 
+  /** 字段失焦后展示该字段的即时校验提示。 */
+  protected markTouched(field: 'name' | 'quantity' | 'location'): void {
+    this.touched.update((value) => ({ ...value, [field]: true }));
+  }
+
+  /** 即时字段错误；空串表示通过。 */
+  protected fieldError(field: 'name' | 'quantity' | 'location'): string {
+    const form = this.form();
+    if (field === 'name' && !form.name.trim()) {
+      return '请输入零食名称';
+    }
+    if (field === 'location' && !form.location.trim()) {
+      return '请输入存放位置';
+    }
+    if (field === 'quantity') {
+      const raw = form.quantity.trim();
+      if (!raw) {
+        return '请填写数量';
+      }
+      const quantity = Number(raw);
+      if (!Number.isInteger(quantity) || quantity < 0) {
+        return '数量必须是不小于 0 的整数';
+      }
+    }
+    return '';
+  }
+
   protected save(): void {
     const form = this.form();
-    const name = form.name.trim();
-    const location = form.location.trim();
-    if (!name || !location) {
-      this.formError.set('名称和存放位置不能为空');
+    this.formError.set('');
+    this.touched.set({ name: true, quantity: true, location: true });
+    const invalid = (['name', 'quantity', 'location'] as const).find(
+      (field) => this.fieldError(field) !== '',
+    );
+    if (invalid) {
       return;
     }
-    if (form.quantity.trim() === '') {
-      this.formError.set('请填写数量');
-      return;
-    }
-    const quantity = Number(form.quantity);
-    if (!Number.isInteger(quantity) || quantity < 0) {
-      this.formError.set('数量必须是不小于 0 的整数');
-      return;
-    }
-    // 状态/时间一致性归一化（契约 §3）：finished 才带 finished_at（留空则填当前时间），
-    // in_stock 不带 opened_at/finished_at —— 例如“已吃完→未打开”保存后不再残留矛盾时间。
+    // 状态/日期一致性归一化（契约 §3）：finished 才带 finished_at（留空则填当前日期），
+    // in_stock 不带 opened_at/finished_at —— 例如“已吃完→未打开”保存后不再残留矛盾日期。
     const input: SnackInput = formToSnackInput(form);
     const editing = this.editing();
     this.saving.set(true);
@@ -215,7 +334,7 @@ export class Snacks {
   protected markOpened(snack: Snack): void {
     this.quickPut(
       snack,
-      { ...snackToInput(snack), status: 'opened' },
+      { ...snackToInput(snack), status: 'opened', opened_at: currentLocalDate() },
       `「${snack.name}」已标记打开`,
     );
   }
@@ -223,18 +342,36 @@ export class Snacks {
   protected markFinished(snack: Snack): void {
     this.quickPut(
       snack,
-      { ...snackToInput(snack), status: 'finished', finished_at: currentLocalMinute() },
+      { ...snackToInput(snack), status: 'finished', finished_at: currentLocalDate() },
       `「${snack.name}」已标记吃完`,
     );
   }
 
   protected remove(snack: Snack): void {
-    if (!window.confirm(`确定删除零食「${snack.name}」吗？`)) {
+    this.pendingDelete.set(snack);
+  }
+
+  protected cancelDelete(): void {
+    this.pendingDelete.set(null);
+  }
+
+  protected confirmDelete(): void {
+    const snack = this.pendingDelete();
+    if (!snack || this.quickBusyId() !== null) {
       return;
     }
+    this.quickBusyId.set(snack.id);
     this.snackService.remove(snack.id).subscribe({
-      next: () => this.afterMutation('零食已删除'),
-      error: (err: unknown) => this.error.set(apiErrorMessage(err, '删除失败')),
+      next: () => {
+        this.quickBusyId.set(null);
+        this.pendingDelete.set(null);
+        this.afterMutation('零食已删除');
+      },
+      error: (err: unknown) => {
+        this.quickBusyId.set(null);
+        this.pendingDelete.set(null);
+        this.error.set(apiErrorMessage(err, '删除失败'));
+      },
     });
   }
 
@@ -246,32 +383,31 @@ export class Snacks {
     return lifecycleBadge(snack.status);
   }
 
-  /** 按生命周期状态屏蔽矛盾时间：未打开不显示任何时间，吃完时间仅在已吃完时显示。 */
-  protected timeCellOf(snack: Snack, kind: 'opened' | 'finished'): string {
-    if (kind === 'finished') {
-      if (snack.status !== 'finished' || !snack.finished_at) {
-        return '—';
-      }
-      return snack.finished_at.replace('T', ' ');
-    }
-    if (snack.status === 'in_stock' || !snack.opened_at) {
+  /** 按生命周期状态屏蔽矛盾日期：未打开不显示任何日期，吃完日期仅在已吃完时显示。 */
+  protected dateCellOf(snack: Snack, kind: 'opened' | 'finished'): string {
+    const value = kind === 'finished' ? snack.finished_at : snack.opened_at;
+    if (kind === 'finished' && snack.status !== 'finished') {
       return '—';
     }
-    return snack.opened_at.replace('T', ' ');
+    if (kind === 'opened' && snack.status === 'in_stock') {
+      return '—';
+    }
+    // 契约 v2 为纯日期；slice 同时兼容启动迁移前的 v1 datetime。
+    return value ? value.slice(0, 10) : '—';
   }
 
   private quickPut(snack: Snack, input: SnackInput, message: string): void {
-    if (this.quickBusy()) {
+    if (this.quickBusyId() !== null) {
       return;
     }
-    this.quickBusy.set(true);
+    this.quickBusyId.set(snack.id);
     this.snackService.update(snack.id, input).subscribe({
       next: () => {
-        this.quickBusy.set(false);
+        this.quickBusyId.set(null);
         this.afterMutation(message);
       },
       error: (err: unknown) => {
-        this.quickBusy.set(false);
+        this.quickBusyId.set(null);
         this.error.set(apiErrorMessage(err, '操作失败'));
       },
     });

@@ -1,4 +1,4 @@
-import { currentLocalMinute, daysUntil, lifecycleBadge, snackBadge } from './snack-status';
+import { currentLocalDate, daysUntil, lifecycleBadge, snackBadge } from './snack-status';
 
 function formatDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -47,8 +47,11 @@ describe('lifecycleBadge', () => {
   });
 });
 
-describe('currentLocalMinute', () => {
-  it('produces the contract time format YYYY-MM-DDTHH:MM', () => {
-    expect(currentLocalMinute()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+describe('currentLocalDate', () => {
+  it('produces the contract date format YYYY-MM-DD', () => {
+    const value = currentLocalDate();
+    expect(value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(value).not.toContain('T');
+    expect(value).toBe(formatDate(new Date()));
   });
 });

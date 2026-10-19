@@ -11,31 +11,50 @@
 }
 
 <form class="add-form" (ngSubmit)="add()">
-  <input
-    name="new-username"
-    placeholder="新用户名"
-    autocomplete="off"
-    [ngModel]="newUsername()"
-    (ngModelChange)="newUsername.set($event)"
-  />
-  <input
-    name="new-password"
-    type="password"
-    placeholder="初始密码"
-    autocomplete="new-password"
-    [ngModel]="newPassword()"
-    (ngModelChange)="newPassword.set($event)"
-  />
+  <label class="add-field">
+    <input
+      name="new-username"
+      placeholder="新用户名"
+      autocomplete="off"
+      [class.invalid]="touched().username && fieldError('username')"
+      [attr.aria-invalid]="touched().username && fieldError('username') ? 'true' : null"
+      [ngModel]="newUsername()"
+      (ngModelChange)="newUsername.set($event)"
+      (blur)="markTouched('username')"
+    />
+    @if (touched().username && fieldError('username')) {
+      <p class="field-error" role="alert">{{ fieldError('username') }}</p>
+    }
+  </label>
+  <label class="add-field">
+    <input
+      name="new-password"
+      type="password"
+      placeholder="初始密码"
+      autocomplete="new-password"
+      [class.invalid]="touched().password && fieldError('password')"
+      [attr.aria-invalid]="touched().password && fieldError('password') ? 'true' : null"
+      [ngModel]="newPassword()"
+      (ngModelChange)="newPassword.set($event)"
+      (blur)="markTouched('password')"
+    />
+    @if (touched().password && fieldError('password')) {
+      <p class="field-error" role="alert">{{ fieldError('password') }}</p>
+    }
+  </label>
   <button class="btn primary" type="submit" [disabled]="adding()">
     {{ adding() ? '添加中…' : '+ 添加账户' }}
   </button>
 </form>
 
-@if (loading()) {
-  <p class="muted">加载中…</p>
+@if (loading() && users().length === 0) {
+  <div class="loading-state" role="status">
+    <span class="spinner" aria-hidden="true"></span>
+    正在加载账户…
+  </div>
 }
 
-<div class="table-wrap">
+<div class="table-wrap" [class.is-loading]="loading()">
   <table class="data">
     <thead>
       <tr>
@@ -63,16 +82,41 @@
               <span class="badge">否</span>
             }
           </td>
-          <td>{{ user.created_at ?? '—' }}</td>
+          <td>{{ displayDate(user.created_at) }}</td>
           <td class="col-ops">
             <button class="btn small danger" type="button" (click)="remove(user)">删除</button>
           </td>
         </tr>
       } @empty {
         <tr>
-          <td class="empty" colspan="5">暂无账户。</td>
+          <td class="empty" colspan="5">
+            {{ loading() ? '正在加载…' : '暂无账户。' }}
+          </td>
         </tr>
       }
     </tbody>
   </table>
 </div>
+
+@if (pendingDelete(); as target) {
+  <div class="modal-backdrop" (click)="cancelDelete()">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-user-title"
+      (click)="$event.stopPropagation()"
+    >
+      <h3 id="delete-user-title">删除账户</h3>
+      <p class="muted">确定删除账户「{{ target.username }}」吗？此操作不可撤销。</p>
+      <div class="modal-actions">
+        <button class="btn" type="button" [disabled]="removing()" (click)="cancelDelete()">
+          取消
+        </button>
+        <button class="btn danger" type="button" [disabled]="removing()" (click)="confirmDelete()">
+          {{ removing() ? '删除中…' : '删除' }}
+        </button>
+      </div>
+    </div>
+  </div>
+}

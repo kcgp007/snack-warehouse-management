@@ -53,9 +53,9 @@ export function lifecycleBadge(status: SnackLifecycle): LifecycleBadge {
   }
 }
 
-/** 当前本地时间，格式 YYYY-MM-DDTHH:MM（与契约时间格式一致）。 */
-export function currentLocalMinute(): string {
+/** 当前本地日期，格式 YYYY-MM-DD（与契约日期格式一致）。 */
+export function currentLocalDate(): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }

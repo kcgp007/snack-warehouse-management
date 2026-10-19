@@ -13,12 +13,13 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::error::ApiError;
+use crate::util::is_api_path;
 use crate::AppState;
 
 /// 静态资源 fallback 处理器（非 `/api` 路径）。
 pub(crate) async fn spa_fallback(State(state): State<AppState>, req: Request) -> Response {
     let path = req.uri().path().to_owned();
-    if path.starts_with("/api") {
+    if is_api_path(&path) {
         return ApiError::not_found("接口不存在").into_response();
     }
     serve(&state.static_dir, &path).await

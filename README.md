@@ -4,12 +4,12 @@
 
 ## 功能特性
 
-- **零食库存管理**：名称、数量、存放位置、购买日期、过期日期、备注；支持按名称/备注搜索、按存放位置筛选。
+- **零食库存管理**：名称、数量、存放位置、购买日期、过期日期、备注；支持按名称/备注搜索、按存放位置筛选；位置输入带**已有位置自动补全**（`GET /api/locations?q=`，可点击快选或自由输入）。
 - **双重状态维度**：
   - 过期状态（基于过期日期）：已过期 / ≤7 天 / 正常 / 无过期日期；
-  - 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完），并记录打开时间、吃完时间（状态选“已吃完”而吃完时间留空时由服务端自动填充），支持一键“标记打开 / 标记吃完”。
+  - 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完），并记录打开日期、吃完日期（契约 v2：纯 `YYYY-MM-DD`；状态选“已吃完”而吃完日期留空时由服务端自动填充当前本地日期），支持一键“标记打开 / 标记吃完”。
 - **过期提醒**：`/reminders` 页面按分级（`expired` 已过期、`critical` ≤3 天、`warning` ≤7 天）展示即将过期的零食与剩余天数；已吃完的零食不再出现在提醒中；导航栏与库存页显示提醒角标。
-- **登录认证**：登录后签发高熵 token（前端存 localStorage，所有请求携带 `Authorization: Bearer`），401 自动跳转登录页；支持退出登录、修改密码。
+- **登录认证**：登录后签发高熵 token（前端存 localStorage，所有请求携带 `Authorization: Bearer`），401 自动跳转登录页；支持退出登录、修改密码；启动时清理已过期会话。
 - **admin 账户管理**：管理员可查看/创建/删除普通账户（不能删除自己）；非管理员访问账户管理接口返回 403；首次启动自动初始化 admin 账户。
 - **单进程部署**：无 Nginx / API 网关 / 独立认证服务等中间件，Angular 构建产物由 Rust 后端直接托管（含 SPA fallback）。
 
@@ -95,22 +95,24 @@ snack-warehouse-management/
 | `GET /api/auth/me` | 当前用户对象 |
 | `POST /api/auth/change-password` | `{"old_password","new_password"}` → `204`；新密码 <6 字符 → `400` |
 | `GET /api/snacks` | 查询参数 `q`/`location`/`expiry_status`(all\|ok\|expiring\|expired)/`status`(all\|in_stock\|opened\|finished)，返回**裸数组** |
-| `POST /api/snacks` | 创建零食，`201`；校验失败 `400`；`status="finished"` 且未带 `finished_at` 时服务端自动填充 |
-| `PUT /api/snacks/{id}` | 更新，`200`；不存在 `404` |
+| `POST /api/snacks` | 创建零食，`201`；校验失败 `400`；`opened_at`/`finished_at` 只接受 `YYYY-MM-DD`（传 `YYYY-MM-DDTHH:MM` → `400`）；`status="finished"` 且未带 `finished_at` 时服务端自动填充当前本地日期 |
+| `PUT /api/snacks/{id}` | 更新，`200`；不存在 `404`；日期校验同创建 |
 | `DELETE /api/snacks/{id}` | `204`；不存在 `404` |
-| `GET /api/locations` | 存放位置去重数组（字典序） |
+| `GET /api/locations` | 存放位置去重数组（字典序）；可选 `q` 做子串包含过滤，缺省/空串返回全部 |
 | `GET /api/reminders` | Snack 字段 + `days_left` + `level`（`expired`\|`critical`\|`warning`），排除 `finished`，按过期日期升序 |
 | `GET /api/users` `POST /api/users` | 仅管理员（非管理员 `403`）；创建 `201`，用户名重复 `409` |
 | `DELETE /api/users/{id}` | `204`；删除自己 `400 {"error":"不能删除当前登录账户"}`；不存在 `404` |
 | 非 `/api` 路径 | 托管静态文件；磁盘无对应文件时回退 `index.html`（SPA fallback） |
+
+启动时会幂等迁移旧库中的生命周期时间：`YYYY-MM-DDTHH:MM` 截取前 10 位为纯日期，非法值置 `NULL`。
 
 完整契约见 [`CONTRACT.md`](CONTRACT.md)。
 
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（登录、401/403、snacks CRUD 与校验、reminders 分级、
-# 用户管理与“不能删除自己”、admin 幂等初始化、静态/SPA 托管等）
+# 后端：单元测试 + 集成测试（登录、401/403、snacks CRUD 与 v2 日期校验、启动日期迁移、
+# 位置过滤/通配符转义、405 JSON、reminders 分级、用户管理、admin 幂等初始化、静态/SPA 托管等）
 cd backend && cargo test
 
 # 前端：单元测试（vitest）

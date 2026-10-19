@@ -10,10 +10,7 @@ use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{parse_json, ApiError};
-use crate::util::{
-    is_valid_date, is_valid_datetime, now_local_minutes, now_rfc3339, today_plus_days,
-    today_string,
-};
+use crate::util::{is_valid_date, now_rfc3339, today_plus_days, today_string};
 use crate::AppState;
 
 /// 生命周期状态枚举（契约 §1 snacks.status）。
@@ -66,9 +63,9 @@ pub(crate) struct SnackInput {
     pub notes: Option<String>,
 }
 
-/// 校验 SnackInput（缺字段 / quantity<0 / 日期时间格式非法 / status 非法 → 400）。
+/// 校验 SnackInput（缺字段 / quantity<0 / 日期格式非法 / status 非法 → 400）。
 ///
-/// 服务端规则：`status="finished"` 且未带 `finished_at` 时自动填充当前本地时间（契约 §3）。
+/// 服务端规则：`status="finished"` 且未带 `finished_at` 时自动填充当前本地日期（契约 §3）。
 fn validate(raw: SnackInputRaw) -> Result<SnackInput, ApiError> {
     let name = raw
         .name
@@ -97,8 +94,8 @@ fn validate(raw: SnackInputRaw) -> Result<SnackInput, ApiError> {
 
     let purchase_date = optional_date(raw.purchase_date, "purchase_date")?;
     let expiry_date = optional_date(raw.expiry_date, "expiry_date")?;
-    let opened_at = optional_datetime(raw.opened_at, "opened_at")?;
-    let mut finished_at = optional_datetime(raw.finished_at, "finished_at")?;
+    let opened_at = optional_date(raw.opened_at, "opened_at")?;
+    let mut finished_at = optional_date(raw.finished_at, "finished_at")?;
 
     let status = raw.status.unwrap_or_else(|| "in_stock".to_owned());
     if !LIFECYCLE_STATUSES.contains(&status.as_str()) {
@@ -107,7 +104,7 @@ fn validate(raw: SnackInputRaw) -> Result<SnackInput, ApiError> {
         ));
     }
     if status == "finished" && finished_at.is_none() {
-        finished_at = Some(now_local_minutes());
+        finished_at = Some(today_string());
     }
 
     Ok(SnackInput {
@@ -130,17 +127,6 @@ fn optional_date(value: Option<String>, field: &str) -> Result<Option<String>, A
         Some(s) if is_valid_date(&s) => Ok(Some(s)),
         Some(_) => Err(ApiError::bad_request(format!(
             "{field} 日期格式必须为 YYYY-MM-DD"
-        ))),
-    }
-}
-
-fn optional_datetime(value: Option<String>, field: &str) -> Result<Option<String>, ApiError> {
-    match value {
-        None => Ok(None),
-        Some(s) if s.is_empty() => Ok(None),
-        Some(s) if is_valid_datetime(&s) => Ok(Some(s)),
-        Some(_) => Err(ApiError::bad_request(format!(
-            "{field} 时间格式必须为 YYYY-MM-DDTHH:MM"
         ))),
     }
 }
@@ -196,12 +182,7 @@ pub(crate) async fn list(
     let mut wheres: Vec<String> = Vec::new();
     let mut binds: Vec<Value> = Vec::new();
 
-    if let Some(term) = query
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(term) = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         // ESCAPE 必须显式声明，否则 `escape_like` 写入的 `\%` / `\_` 只是普通字符，
         // `%`/`_` 仍会被 SQLite 当通配符（搜 `100%`/`a_b` 会漏检或误命中）。
         wheres.push("(name LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\')".to_owned());
@@ -261,7 +242,9 @@ pub(crate) async fn list(
 
 /// 转义 LIKE 通配符（`\` 为 ESCAPE 字符）。
 fn escape_like(term: &str) -> String {
-    term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    term.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// `POST /api/snacks` — 201 返回 Snack。
@@ -351,13 +334,43 @@ pub(crate) async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/locations` — 去重后的存放位置，按字典序。
+/// `GET /api/locations` 查询参数：`q` 为位置子串（缺省/空串返回全部）。
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct LocationQuery {
+    pub q: Option<String>,
+}
+
+/// `GET /api/locations?q=` — 去重后的存放位置，按字典序；
+/// `q` 按子串包含过滤（契约 §3），缺省或空串返回全部。
 pub(crate) async fn locations(
     State(state): State<AppState>,
+    query: Result<Query<LocationQuery>, QueryRejection>,
 ) -> Result<Json<Vec<String>>, ApiError> {
+    let term = query?
+        .0
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+
     let conn = state.conn();
-    let mut stmt = conn.prepare("SELECT DISTINCT location FROM snacks ORDER BY location")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    let locations = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(Json(locations))
+    let values = match term {
+        None => {
+            let mut stmt =
+                conn.prepare("SELECT DISTINCT location FROM snacks ORDER BY location")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        }
+        Some(term) => {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT location FROM snacks WHERE location LIKE ? ESCAPE '\\' \
+                 ORDER BY location",
+            )?;
+            let pattern = format!("%{}%", escape_like(&term));
+            let rows = stmt.query_map([pattern], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        }
+    };
+    Ok(Json(values))
 }

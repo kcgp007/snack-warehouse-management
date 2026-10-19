@@ -1,49 +1,34 @@
-.page-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  align-items: baseline;
-  margin-bottom: 14px;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.hint {
-  margin: 0;
-  color: #627d98;
-  font-size: 13px;
-}
-
 .add-form {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 18px;
 }
 
 .add-form input {
-  min-width: 200px;
+  min-width: 210px;
 }
 
-.table-wrap {
-  overflow-x: auto;
-  border: 1px solid #e4e7eb;
-  border-radius: 8px;
-  background: #fff;
+.add-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 210px;
 }
 
-.col-ops {
-  white-space: nowrap;
-  width: 100px;
+.add-field input {
+  width: 100%;
+}
+
+.add-field .field-error {
+  margin: 0;
 }
 
 .tag {
   display: inline-block;
   margin-left: 6px;
-  padding: 0 6px;
+  padding: 1px 8px;
   border-radius: 999px;
   background: #e1effe;
   color: #1e429f;
@@ -51,12 +36,14 @@
   line-height: 18px;
 }
 
-.empty {
-  text-align: center;
-  color: #829ab1;
-  padding: 28px 12px !important;
+.col-ops {
+  width: 96px;
 }
 
-.muted {
-  color: #829ab1;
+@media (max-width: 520px) {
+  .add-form input,
+  .add-field,
+  .add-form .btn {
+    flex: 1 1 100%;
+  }
 }

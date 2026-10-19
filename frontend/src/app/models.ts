@@ -22,7 +22,7 @@ export type ExpiryStatusFilter = 'all' | 'ok' | 'expiring' | 'expired';
 /** 生命周期状态筛选（请求参数 status） */
 export type LifecycleStatusFilter = 'all' | SnackLifecycle;
 
-/** POST/PUT /api/snacks 的请求体；日期 YYYY-MM-DD，时间 YYYY-MM-DDTHH:MM，均可为 null */
+/** POST/PUT /api/snacks 的请求体；所有日期均为 YYYY-MM-DD，可为 null */
 export interface SnackInput {
   name: string;
   quantity: number;

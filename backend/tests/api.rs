@@ -129,7 +129,9 @@ async fn send_raw(
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("读取响应体");
+    let bytes = to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("读取响应体");
     Resp {
         status,
         content_type,
@@ -194,7 +196,12 @@ fn snack(name: &str, location: &str, expiry_date: Option<&str>) -> Value {
 
 async fn create_snack(app: &Router, token: &str, payload: Value) -> Value {
     let resp = send(app, "POST", "/api/snacks", Some(token), Some(payload)).await;
-    assert_eq!(resp.status, StatusCode::CREATED, "创建零食失败: {}", resp.body);
+    assert_eq!(
+        resp.status,
+        StatusCode::CREATED,
+        "创建零食失败: {}",
+        resp.body
+    );
     resp.json()
 }
 
@@ -477,36 +484,69 @@ async fn snacks_crud_and_validation() {
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 
     // DELETE → 204；再次删除 → 404
-    let resp = send(&app, "DELETE", &format!("/api/snacks/{id}"), Some(&token), None).await;
+    let resp = send(
+        &app,
+        "DELETE",
+        &format!("/api/snacks/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::NO_CONTENT);
-    let resp = send(&app, "DELETE", &format!("/api/snacks/{id}"), Some(&token), None).await;
+    let resp = send(
+        &app,
+        "DELETE",
+        &format!("/api/snacks/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 
     // 校验失败 → 400 + {"error"}（缺字段 / quantity<0 / 日期时间格式 / status 非法）
     let bad_cases: Vec<Value> = vec![
-        json!({}),                                                     // 缺全部必填
-        json!({"quantity": 1, "location": "客厅"}),                    // 缺 name
-        json!({"name": "x", "location": "客厅"}),                      // 缺 quantity
-        json!({"name": "x", "quantity": 1}),                           // 缺 location
-        json!({"name": "  ", "quantity": 1, "location": "客厅"}),       // 空名称
-        json!({"name": "x", "quantity": 1, "location": " "}),          // 空位置
-        json!({"name": "x", "quantity": -1, "location": "客厅"}),       // 负数量
-        json!({"name": "x", "quantity": "abc", "location": "客厅"}),    // quantity 类型错误
+        json!({}),                                                   // 缺全部必填
+        json!({"quantity": 1, "location": "客厅"}),                  // 缺 name
+        json!({"name": "x", "location": "客厅"}),                    // 缺 quantity
+        json!({"name": "x", "quantity": 1}),                         // 缺 location
+        json!({"name": "  ", "quantity": 1, "location": "客厅"}),    // 空名称
+        json!({"name": "x", "quantity": 1, "location": " "}),        // 空位置
+        json!({"name": "x", "quantity": -1, "location": "客厅"}),    // 负数量
+        json!({"name": "x", "quantity": "abc", "location": "客厅"}), // quantity 类型错误
         json!({"name": "x", "quantity": 1, "location": "客厅", "purchase_date": "2026/01/05"}),
         json!({"name": "x", "quantity": 1, "location": "客厅", "expiry_date": "not-a-date"}),
         json!({"name": "x", "quantity": 1, "location": "客厅", "expiry_date": "2026-02-30"}),
         json!({"name": "x", "quantity": 1, "location": "客厅", "status": "bad-status"}),
-        json!({"name": "x", "quantity": 1, "location": "客厅", "opened_at": "2026-01-05 10:00"}),
-        json!({"name": "x", "quantity": 1, "location": "客厅", "finished_at": "2026-01-05"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "opened_at": "2026-01-05T10:00"}),
+        json!({"name": "x", "quantity": 1, "location": "客厅", "finished_at": "2026-01-05T10:00"}),
     ];
     for (index, case) in bad_cases.iter().enumerate() {
-        let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(case.clone())).await;
-        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "case {index}: {}", resp.body);
+        let resp = send(
+            &app,
+            "POST",
+            "/api/snacks",
+            Some(&token),
+            Some(case.clone()),
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::BAD_REQUEST,
+            "case {index}: {}",
+            resp.body
+        );
         assert!(resp.json().get("error").is_some(), "case {index} 错误体");
     }
 
     // 非法 JSON 请求体 → 400
-    let resp = send_raw(&app, "POST", "/api/snacks", Some(&token), Some("nope".to_owned())).await;
+    let resp = send_raw(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some("nope".to_owned()),
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 
     // PUT 同样执行校验（先校验后查存在性）
@@ -532,7 +572,7 @@ async fn snacks_lifecycle_status_and_finished_autofill() {
     let app = build_app(dir.cfg()).expect("build_app");
     let token = token_of(&app, "admin", "admin123").await;
 
-    // status=opened + opened_at 正常保存
+    // status=opened + opened_at 纯日期正常保存
     let resp = send(
         &app,
         "POST",
@@ -540,16 +580,16 @@ async fn snacks_lifecycle_status_and_finished_autofill() {
         Some(&token),
         Some(json!({
             "name": "酸奶", "quantity": 2, "location": "厨房/冰箱",
-            "status": "opened", "opened_at": "2026-03-01T09:30"
+            "status": "opened", "opened_at": "2026-03-01"
         })),
     )
     .await;
     assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
     let yogurt = resp.json();
     assert_eq!(yogurt["status"], "opened");
-    assert_eq!(yogurt["opened_at"], "2026-03-01T09:30");
+    assert_eq!(yogurt["opened_at"], "2026-03-01");
 
-    // status=finished 未带 finished_at → 服务端自动填充当前本地时间（契约 §3 服务端规则）
+    // status=finished 未带 finished_at → 服务端自动填充当前本地日期（契约 v2）
     let resp = send(
         &app,
         "POST",
@@ -561,10 +601,11 @@ async fn snacks_lifecycle_status_and_finished_autofill() {
     assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
     let biscuit = resp.json();
     assert_eq!(biscuit["status"], "finished");
-    let finished_at = biscuit["finished_at"].as_str().expect("自动填充 finished_at");
-    assert_eq!(finished_at.len(), 16, "应为 YYYY-MM-DDTHH:MM: {finished_at}");
-    assert_eq!(&finished_at[10..11], "T");
-    assert_eq!(&finished_at[4..5], "-");
+    let finished_at = biscuit["finished_at"]
+        .as_str()
+        .expect("自动填充 finished_at");
+    assert_eq!(finished_at, local_date(0), "自动填充当前本地日期");
+    assert_eq!(finished_at.len(), 10, "应为 YYYY-MM-DD: {finished_at}");
 
     // status=finished 带显式 finished_at → 保留原值
     let resp = send(
@@ -574,19 +615,54 @@ async fn snacks_lifecycle_status_and_finished_autofill() {
         Some(&token),
         Some(json!({
             "name": "蛋糕", "quantity": 1, "location": "客厅",
-            "status": "finished", "finished_at": "2026-03-02T18:00"
+            "status": "finished", "finished_at": "2026-03-02"
         })),
     )
     .await;
     assert_eq!(resp.status, StatusCode::CREATED);
-    assert_eq!(resp.json()["finished_at"], "2026-03-02T18:00");
+    assert_eq!(resp.json()["finished_at"], "2026-03-02");
 
-    // 非法时间格式 → 400（POST 与 PUT）
+    // 非法日期格式 → 400（POST 与 PUT；v1 的 datetime 在 v2 必须被拒绝）
     for field in ["opened_at", "finished_at"] {
-        let mut payload = json!({"name": "x", "quantity": 1, "location": "y"});
-        payload[field] = json!("2026-03-01 09:30");
-        let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(payload.clone())).await;
-        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{field} {}", resp.body);
+        for invalid in [
+            "2026-03-01T09:30",
+            "2026-03-01 09:30",
+            "2026-02-30",
+            "2026/03/01",
+        ] {
+            let mut payload = json!({"name": "x", "quantity": 1, "location": "y"});
+            payload[field] = json!(invalid);
+            let resp = send(
+                &app,
+                "POST",
+                "/api/snacks",
+                Some(&token),
+                Some(payload.clone()),
+            )
+            .await;
+            assert_eq!(
+                resp.status,
+                StatusCode::BAD_REQUEST,
+                "POST {field}={invalid}: {}",
+                resp.body
+            );
+            assert!(resp.json().get("error").is_some());
+
+            let resp = send(
+                &app,
+                "PUT",
+                &format!("/api/snacks/{}", yogurt["id"].as_i64().unwrap()),
+                Some(&token),
+                Some(payload),
+            )
+            .await;
+            assert_eq!(
+                resp.status,
+                StatusCode::BAD_REQUEST,
+                "PUT {field}={invalid}: {}",
+                resp.body
+            );
+        }
     }
 
     // 非法 status 枚举 → 400（POST 与 PUT）
@@ -616,6 +692,82 @@ async fn snacks_lifecycle_status_and_finished_autofill() {
 }
 
 // ---------------------------------------------------------------------------
+// v1 → v2 存量迁移（启动时幂等规范化 opened_at/finished_at）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn legacy_datetime_values_are_migrated_on_startup() {
+    let _guard = test_guard();
+    let dir = TempDir::new("legacy-migration");
+    let cfg = dir.cfg();
+
+    // 先启动一次完成建表，然后关闭连接（Router drop 释放 SQLite 连接）。
+    let app = build_app(cfg.clone()).expect("build_app");
+    drop(app);
+
+    // 模拟 v1 存量数据：合法 datetime、旧格式、非法值。
+    {
+        let conn = rusqlite::Connection::open(&cfg.db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO snacks (name, quantity, location, opened_at, finished_at, status, \
+             created_at, updated_at) VALUES \
+             ('旧格式', 1, '厨房/冰箱', '2026-03-01T09:30', '2026-03-02 18:00', 'finished', \
+              '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO snacks (name, quantity, location, opened_at, finished_at, status, \
+             created_at, updated_at) VALUES \
+             ('非法值', 1, '客厅', 'not-a-date', '2026-02-30T10:00', 'opened', \
+              '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    }
+
+    // 再次启动 → 迁移执行；接口只返回纯日期，非法值变 null。
+    let app = build_app(cfg.clone()).expect("rebuild build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+    let resp = send(&app, "GET", "/api/snacks", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let list = resp.json();
+    let items = list.as_array().expect("裸数组");
+    assert_eq!(items.len(), 2);
+    let migrated = items
+        .iter()
+        .find(|item| item["name"] == "旧格式")
+        .expect("旧格式记录");
+    assert_eq!(migrated["opened_at"], "2026-03-01");
+    assert_eq!(migrated["finished_at"], "2026-03-02");
+    assert_eq!(migrated["status"], "finished");
+    let invalid = items
+        .iter()
+        .find(|item| item["name"] == "非法值")
+        .expect("非法值记录");
+    assert!(invalid["opened_at"].is_null(), "非法 opened_at 应置 null");
+    assert!(
+        invalid["finished_at"].is_null(),
+        "非法 finished_at 应置 null"
+    );
+    drop(app);
+
+    // 幂等：第三次启动不改变已规范化的值。
+    let app = build_app(cfg).expect("third build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+    let resp = send(&app, "GET", "/api/snacks", Some(&token), None).await;
+    let again = resp.json();
+    let migrated_again = again
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "旧格式")
+        .unwrap();
+    assert_eq!(migrated_again["opened_at"], "2026-03-01");
+    assert_eq!(migrated_again["finished_at"], "2026-03-02");
+}
+
+// ---------------------------------------------------------------------------
 // 列表过滤（q / location / expiry_status / status）
 // ---------------------------------------------------------------------------
 
@@ -633,7 +785,7 @@ async fn snacks_list_filters() {
     // 2 牛奶：expiring（+3 天），生命周期 opened
     let mut milk = snack("牛奶", "厨房/冰箱", Some(&local_date(3)));
     milk["status"] = json!("opened");
-    milk["opened_at"] = json!(format!("{}T08:00", local_date(-1)));
+    milk["opened_at"] = json!(local_date(-1));
     create_snack(&app, &token, milk).await;
     // 3 饼干：ok（+30 天），生命周期 finished
     let mut biscuit = snack("饼干", "客厅/零食柜", Some(&local_date(30)));
@@ -668,21 +820,63 @@ async fn snacks_list_filters() {
     assert_eq!(names(&resp.json()), vec!["薯片", "饼干"]);
 
     // expiry_status 过期维度（契约改名后的参数）
-    let resp = send(&app, "GET", "/api/snacks?expiry_status=expired", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?expiry_status=expired",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(names(&resp.json()), vec!["薯片"]);
-    let resp = send(&app, "GET", "/api/snacks?expiry_status=expiring", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?expiry_status=expiring",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(names(&resp.json()), vec!["牛奶"]);
-    let resp = send(&app, "GET", "/api/snacks?expiry_status=ok", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?expiry_status=ok",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(names(&resp.json()), vec!["饼干", "面条"]);
-    let resp = send(&app, "GET", "/api/snacks?expiry_status=all", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?expiry_status=all",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(names(&resp.json()).len(), 4);
 
     // status 生命周期维度
-    let resp = send(&app, "GET", "/api/snacks?status=in_stock", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?status=in_stock",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(names(&resp.json()), vec!["薯片", "面条"]);
     let resp = send(&app, "GET", "/api/snacks?status=opened", Some(&token), None).await;
     assert_eq!(names(&resp.json()), vec!["牛奶"]);
-    let resp = send(&app, "GET", "/api/snacks?status=finished", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?status=finished",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(names(&resp.json()), vec!["饼干"]);
 
     // 两个维度可组合
@@ -697,10 +891,24 @@ async fn snacks_list_filters() {
     assert_eq!(names(&resp.json()), vec!["饼干"]);
 
     // 非法枚举 → 400
-    let resp = send(&app, "GET", "/api/snacks?expiry_status=weird", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?expiry_status=weird",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
     // 改名后的破坏性变更：旧值 expired 现在是非法 status → 400
-    let resp = send(&app, "GET", "/api/snacks?status=expired", Some(&token), None).await;
+    let resp = send(
+        &app,
+        "GET",
+        "/api/snacks?status=expired",
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 
     // GET /api/locations：去重 + 字典序
@@ -718,6 +926,41 @@ async fn snacks_list_filters() {
         .collect();
     assert_eq!(values, vec!["厨房/冰箱", "客厅/零食柜", "阳台/储物箱"]);
     assert_eq!(values.len(), 3, "应去重");
+
+    // v2：q 子串过滤（缺省/空串仍返回全部）
+    for uri in ["/api/locations?q=", "/api/locations?q=%20"] {
+        let resp = send(&app, "GET", uri, Some(&token), None).await;
+        assert_eq!(resp.status, StatusCode::OK, "{uri}: {}", resp.body);
+        assert_eq!(resp.json().as_array().unwrap().len(), 3, "{uri}");
+    }
+    let resp = send(
+        &app,
+        "GET",
+        "/api/locations?q=%E5%AE%A2",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.json(), json!(["客厅/零食柜"]));
+    let resp = send(
+        &app,
+        "GET",
+        "/api/locations?q=%E5%8E%A8",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.json(), json!(["厨房/冰箱"]));
+    let resp = send(
+        &app,
+        "GET",
+        "/api/locations?q=%E4%B8%8D%E5%AD%98%E5%9C%A8",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(resp.json(), json!([]));
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +980,9 @@ async fn snacks_search_escapes_like_wildcards() {
     // 名称含字面量 `_`：`a_b` 与会被 `_` 通配符误命中的 `aXb`
     create_snack(&app, &token, snack("薯条a_b口味", "厨房/冰箱", None)).await;
     create_snack(&app, &token, snack("薯条aXb口味", "厨房/冰箱", None)).await;
+    // 位置含字面量 `%`：`折扣100%` 与会被 `%` 通配符误命中的 `折扣100袋`
+    create_snack(&app, &token, snack("位置A", "折扣100%", None)).await;
+    create_snack(&app, &token, snack("位置B", "折扣100袋", None)).await;
 
     // `100%`：只命中包含字面量 `100%` 的名称（`%` 不再是通配符）
     let resp = send(&app, "GET", "/api/snacks?q=100%25", Some(&token), None).await;
@@ -750,6 +996,13 @@ async fn snacks_search_escapes_like_wildcards() {
     // 普通子串搜索不受转义影响：`100` 仍同时命中两个名称
     let resp = send(&app, "GET", "/api/snacks?q=100", Some(&token), None).await;
     assert_eq!(names(&resp.json()), vec!["能量棒100%", "能量棒100袋"]);
+
+    // locations 的 q 同样执行 LIKE 转义：`100%` 不得命中 `折扣100袋`
+    let resp = send(&app, "GET", "/api/locations?q=100%25", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.json(), json!(["折扣100%"]));
+    let resp = send(&app, "GET", "/api/locations?q=100", Some(&token), None).await;
+    assert_eq!(resp.json(), json!(["折扣100%", "折扣100袋"]));
 }
 
 // ---------------------------------------------------------------------------
@@ -764,15 +1017,40 @@ async fn reminders_level_order_and_finished_exclusion() {
     let token = token_of(&app, "admin", "admin123").await;
 
     // 近期数据：只在 days_left ≤ 7 的窗口内
-    create_snack(&app, &token, snack("过期奶", "厨房/冰箱", Some(&local_date(-3)))).await;
-    create_snack(&app, &token, snack("今天到期", "厨房/冰箱", Some(&local_date(0)))).await;
+    create_snack(
+        &app,
+        &token,
+        snack("过期奶", "厨房/冰箱", Some(&local_date(-3))),
+    )
+    .await;
+    create_snack(
+        &app,
+        &token,
+        snack("今天到期", "厨房/冰箱", Some(&local_date(0))),
+    )
+    .await;
     let mut soon = snack("两天", "厨房/冰箱", Some(&local_date(2)));
     soon["status"] = json!("opened");
     create_snack(&app, &token, soon).await;
-    create_snack(&app, &token, snack("五天", "客厅/零食柜", Some(&local_date(5)))).await;
-    create_snack(&app, &token, snack("七天", "客厅/零食柜", Some(&local_date(7)))).await;
+    create_snack(
+        &app,
+        &token,
+        snack("五天", "客厅/零食柜", Some(&local_date(5))),
+    )
+    .await;
+    create_snack(
+        &app,
+        &token,
+        snack("七天", "客厅/零食柜", Some(&local_date(7))),
+    )
+    .await;
     // 应被排除：远期 / 无过期日期 / 已吃完
-    create_snack(&app, &token, snack("远期", "客厅/零食柜", Some(&local_date(30)))).await;
+    create_snack(
+        &app,
+        &token,
+        snack("远期", "客厅/零食柜", Some(&local_date(30))),
+    )
+    .await;
     create_snack(&app, &token, snack("无日期", "阳台/储物箱", None)).await;
     let mut done = snack("已吃完", "厨房/冰箱", Some(&local_date(1)));
     done["status"] = json!("finished");
@@ -878,7 +1156,14 @@ async fn admin_user_management() {
         json!({"username": " ", "password": "carol-pass"}),
         json!({"username": "carol", "password": ""}),
     ] {
-        let resp = send(&app, "POST", "/api/users", Some(&admin_token), Some(payload)).await;
+        let resp = send(
+            &app,
+            "POST",
+            "/api/users",
+            Some(&admin_token),
+            Some(payload),
+        )
+        .await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
     }
 
@@ -909,13 +1194,31 @@ async fn admin_user_management() {
     assert_eq!(resp.status, StatusCode::OK);
 
     // 管理员删除 bob → 204；其会话立即失效（级联）
-    let resp = send(&app, "DELETE", &format!("/api/users/{bob_id}"), Some(&admin_token), None).await;
+    let resp = send(
+        &app,
+        "DELETE",
+        &format!("/api/users/{bob_id}"),
+        Some(&admin_token),
+        None,
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::NO_CONTENT);
     let resp = send(&app, "GET", "/api/auth/me", Some(&bob_token), None).await;
-    assert_eq!(resp.status, StatusCode::UNAUTHORIZED, "删除用户应级联删除 sessions");
+    assert_eq!(
+        resp.status,
+        StatusCode::UNAUTHORIZED,
+        "删除用户应级联删除 sessions"
+    );
 
     // 再次删除 → 404；不存在的 id → 404
-    let resp = send(&app, "DELETE", &format!("/api/users/{bob_id}"), Some(&admin_token), None).await;
+    let resp = send(
+        &app,
+        "DELETE",
+        &format!("/api/users/{bob_id}"),
+        Some(&admin_token),
+        None,
+    )
+    .await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
     let resp = send(&app, "DELETE", "/api/users/99999", Some(&admin_token), None).await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
@@ -1151,10 +1454,16 @@ async fn static_spa_fallback_and_graceful_missing_dir() {
     let dir = TempDir::new("static-present");
     let cfg = dir.cfg();
     std::fs::create_dir_all(cfg.static_dir.join("assets")).expect("创建静态目录");
-    std::fs::write(cfg.static_dir.join("index.html"), "<html>SPA-INDEX-MARKER</html>")
-        .expect("写 index");
-    std::fs::write(cfg.static_dir.join("assets").join("app.js"), "console.log(1);")
-        .expect("写 js");
+    std::fs::write(
+        cfg.static_dir.join("index.html"),
+        "<html>SPA-INDEX-MARKER</html>",
+    )
+    .expect("写 index");
+    std::fs::write(
+        cfg.static_dir.join("assets").join("app.js"),
+        "console.log(1);",
+    )
+    .expect("写 js");
     // 静态目录之外的敏感文件（用于目录穿越断言）
     std::fs::write(dir.path().join("SECRET.txt"), "secret-source-marker").expect("写 secret");
     let app = build_app(cfg).expect("build_app");
@@ -1196,7 +1505,11 @@ async fn static_spa_fallback_and_graceful_missing_dir() {
     );
 
     // 目录穿越 → 不得读取静态目录之外的文件
-    for uri in ["/../SECRET.txt", "/%2e%2e/SECRET.txt", "/assets/../../SECRET.txt"] {
+    for uri in [
+        "/../SECRET.txt",
+        "/%2e%2e/SECRET.txt",
+        "/assets/../../SECRET.txt",
+    ] {
         let resp = send(&app, "GET", uri, None, None).await;
         assert!(
             !resp.body.contains("secret-source-marker"),
@@ -1212,4 +1525,37 @@ async fn static_spa_fallback_and_graceful_missing_dir() {
     let resp = send(&app, "GET", "/api/unknown", Some(&admin_token), None).await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
     assert!(resp.json().get("error").is_some());
+}
+
+#[tokio::test]
+async fn api_prefix_boundaries_and_method_not_allowed_json() {
+    let _guard = test_guard();
+    let dir = TempDir::new("api-boundary");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let admin_token = token_of(&app, "admin", "admin123").await;
+
+    // `/apixxx` 不是 API 路径：无 token 也必须走静态 fallback（而不是 401）。
+    let resp = send(&app, "GET", "/apixxx", None, None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    assert!(!resp.body.contains("认证令牌"), "{}", resp.body);
+
+    // 普通用户访问 `/api/usersfoo`：不是账户管理接口，应为 404 JSON 而非 403。
+    let resp = send(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&admin_token),
+        Some(json!({"username": "carol", "password": "carol-pass"})),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let carol_token = token_of(&app, "carol", "carol-pass").await;
+    let resp = send(&app, "GET", "/api/usersfoo", Some(&carol_token), None).await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND, "{}", resp.body);
+    assert!(resp.json().get("error").is_some(), "{}", resp.body);
+
+    // 路径存在但方法不支持 → 405，且仍为统一 JSON 错误体。
+    let resp = send(&app, "DELETE", "/api/auth/login", Some(&admin_token), None).await;
+    assert_eq!(resp.status, StatusCode::METHOD_NOT_ALLOWED, "{}", resp.body);
+    assert!(resp.json().get("error").is_some(), "{}", resp.body);
 }

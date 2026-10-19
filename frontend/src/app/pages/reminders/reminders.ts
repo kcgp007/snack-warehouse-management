@@ -17,9 +17,7 @@ export class Reminders {
     groupRemindersByLevel(this.reminders.reminders()),
   );
 
-  constructor() {
-    this.reminders.refresh();
-  }
+  // 刷新由 App 的 NavigationEnd 统一触发，避免进入页面时重复请求。
 
   protected daysText(daysLeft: number): string {
     if (daysLeft < 0) {

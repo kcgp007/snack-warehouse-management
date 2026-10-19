@@ -13,7 +13,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{parse_json, ApiError};
-use crate::util::{new_session_token, now_rfc3339};
+use crate::util::{is_api_path, is_users_path, new_session_token, now_rfc3339};
 use crate::AppState;
 
 /// 会话有效期：签发后 7 天（契约 §1 sessions）。
@@ -63,7 +63,7 @@ pub(crate) async fn require_auth(
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_owned();
-    if !path.starts_with("/api") {
+    if !is_api_path(&path) {
         return next.run(req).await;
     }
     if path == "/api/auth/login" && req.method().as_str() == "POST" {
@@ -123,7 +123,7 @@ pub(crate) async fn require_auth(
         return ApiError::unauthorized("登录已过期或令牌无效").into_response();
     }
 
-    if path.starts_with("/api/users") && is_admin == 0 {
+    if is_users_path(&path) && is_admin == 0 {
         return ApiError::forbidden("需要管理员权限").into_response();
     }
 
@@ -141,6 +141,11 @@ pub(crate) async fn require_auth(
 /// 未匹配的 `/api/*` 请求（带有效 token）→ 统一 404 JSON。
 pub(crate) async fn api_not_found() -> ApiError {
     ApiError::not_found("接口不存在")
+}
+
+/// `/api/*` 路径存在但 HTTP 方法不支持 → 统一 405 JSON。
+pub(crate) async fn api_method_not_allowed() -> ApiError {
+    ApiError::method_not_allowed("接口不支持该请求方法")
 }
 
 /// 登录请求体。字段缺失不返回 400，而是按“失败 401”统一处理。
@@ -200,6 +205,8 @@ pub(crate) async fn login(
         ApiError::internal()
     })?
     else {
+        // 用户不存在时也执行一次同代价的 Argon2 校验，避免用户名枚举时间侧信道。
+        let _ = verify_password(&password, dummy_password_hash());
         return Err(unauthorized());
     };
     if !verify_password(&password, &stored_hash) {
@@ -224,6 +231,12 @@ pub(crate) async fn login(
             is_admin: is_admin != 0,
         },
     }))
+}
+
+/// 用户不存在时用于等时比较的占位哈希（首次使用时惰性生成）。
+fn dummy_password_hash() -> &'static str {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DUMMY.get_or_init(|| hash_password("dummy-password-for-timing-equalization"))
 }
 
 /// `POST /api/auth/logout` — 使当前 token 失效，204。
@@ -269,19 +282,25 @@ pub(crate) async fn change_password(
         return Err(ApiError::bad_request("新密码长度至少 6 位"));
     }
 
-    let conn = state.conn();
-    let stored_hash: String = conn.query_row(
-        "SELECT password_hash FROM users WHERE id = ?1",
-        [ctx.user.id],
-        |row| row.get(0),
-    )?;
+    // argon2 校验/哈希耗时数百毫秒：先取出哈希并释放数据库锁，避免阻塞全库请求。
+    let stored_hash: String = {
+        let conn = state.conn();
+        conn.query_row(
+            "SELECT password_hash FROM users WHERE id = ?1",
+            [ctx.user.id],
+            |row| row.get(0),
+        )?
+    };
     if !verify_password(&input.old_password, &stored_hash) {
         return Err(ApiError::bad_request("原密码错误"));
     }
     let new_hash = hash_password(&input.new_password);
-    conn.execute(
-        "UPDATE users SET password_hash = ?1 WHERE id = ?2",
-        rusqlite::params![new_hash, ctx.user.id],
-    )?;
+    {
+        let conn = state.conn();
+        conn.execute(
+            "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+            rusqlite::params![new_hash, ctx.user.id],
+        )?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }

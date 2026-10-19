@@ -32,8 +32,14 @@ export class SnackService {
     return this.http.get<Snack[]>('/api/snacks', { params });
   }
 
-  locations(): Observable<string[]> {
-    return this.http.get<string[]>('/api/locations');
+  /** 已使用过的存放位置；传入 q 时按子串过滤（用于输入自动补全）。 */
+  locations(q?: string): Observable<string[]> {
+    let params = new HttpParams();
+    const term = q?.trim();
+    if (term) {
+      params = params.set('q', term);
+    }
+    return this.http.get<string[]>('/api/locations', { params });
   }
 
   create(input: SnackInput): Observable<Snack> {
