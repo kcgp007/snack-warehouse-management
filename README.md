@@ -28,16 +28,20 @@
 snack-warehouse-management/
 ├── CONTRACT.md      # 前后端集成契约（唯一事实来源）
 ├── README.md        # 本文件
-├── build.sh         # 一键编译脚本
-├── run.sh           # 一键运行脚本（必要时先自动编译）
-├── install.sh       # 一键安装为 systemd 系统服务（开机自启）
-├── uninstall.sh     # 一键卸载系统服务（可选 --purge 删除数据）
+├── build.sh         # 一键编译脚本（产物输出到 dist/）
 ├── backend/         # Rust 后端
 │   ├── src/         # main.rs（入口/环境变量）、lib.rs（路由装配）、auth/snacks/reminders/users/db/static_files...
 │   ├── tests/api.rs # 集成测试（tower::ServiceExt::oneshot，无需真实端口）
 │   └── static/      # 前端构建产物（由 build.sh 生成，不入 git）
 └── frontend/        # Angular 前端
     └── src/app/pages/{login,snacks,reminders,users,change-password}
+
+dist/                # 编译产物目录（由 build.sh 生成，不入 git）
+│   ├── snack-warehouse-backend   # 后端二进制
+│   ├── static/                   # 前端静态资源
+│   ├── run.sh                    # 一键运行脚本（必要时先自动编译）
+│   ├── install.sh                # 一键安装为 systemd 系统服务（开机自启）
+│   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除数据）
 ```
 
 ## 快速开始
@@ -53,7 +57,7 @@ cd dist
 ./run.sh
 
 # 如需部署到任意路径，直接把整个 dist/ 文件夹拷贝过去，再执行 ./run.sh 即可
-# 数据库默认写入当前目录下的 data/app.db（可通过 SNACK_DB_PATH 覆盖）
+# 路径由脚本自动推导，不依赖环境变量设置
 ```
 
 浏览器访问 <http://127.0.0.1:3000> 即可使用。`run.sh` 同时打印局域网地址（如 `http://192.168.x.x:3000`），手机/其他电脑可直接打开。
@@ -68,14 +72,12 @@ cd dist
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `SNACK_DB_PATH` | `data/app.db` | SQLite 数据库文件路径（`data/` 已被 .gitignore 忽略） |
-| `STATIC_DIR` | `static`（当前工作目录下） | 静态资源目录，默认与二进制同目录的 `static/`；可通过环境变量指向任意路径 |
-| `HOST` | `0.0.0.0` | 监听地址，默认监听所有网卡（局域网可直接远程访问）；仅本机访问可设 `127.0.0.1` |
 | `PORT` | `3000` | 监听端口 |
+| `HOST` | `0.0.0.0` | 监听地址，默认监听所有网卡（局域网可直接远程访问）；仅本机访问可设 `127.0.0.1` |
 | `ADMIN_USERNAME` | `admin` | 首次启动自动初始化的管理员用户名 |
 | `ADMIN_PASSWORD` | `admin123` | 首次启动自动初始化的管理员密码 |
 
-经 `./run.sh` 启动时，脚本会为未设置的变量填入上表默认值，并把相对路径（如 `data/app.db`）按**当前工作目录**解析。
+核心路径（后端二进制、静态资源目录、数据库路径）由脚本自动推导（优先当前目录 `dist/`，回退仓库 `backend/` 布局），**不通过环境变量设置**；可通过 `PORT`/`HOST`/`ADMIN_USERNAME`/`ADMIN_PASSWORD` 覆盖非路径配置。
 
 ### 远程无法访问？
 
@@ -95,9 +97,10 @@ cd dist
 Linux + systemd 环境可把应用安装为系统级守护进程（开机自启、崩溃自动重启），需要 root：
 
 ```bash
-sudo ./install.sh                    # 编译 + 安装/升级
-sudo ./install.sh --no-build         # 使用现有编译产物
-sudo PROFILE=release ./install.sh    # 使用 release 后端（仍会先构建前端）
+cd dist                          # 进入编译产物目录
+sudo ./install.sh                # 编译 + 安装/升级（就地安装，以 install.sh 所在目录为运行目录）
+sudo ./install.sh --no-build     # 使用现有编译产物
+sudo PROFILE=release ./install.sh # 使用 release 后端（仍会先构建前端）
 ```
 
 安装脚本会：
@@ -105,12 +108,10 @@ sudo PROFILE=release ./install.sh    # 使用 release 后端（仍会先构建�
 - 以仓库所有者身份执行 `./build.sh`（避免在 `target/` 下留下 root 所有的文件）；
 - 创建无登录 shell 的系统用户 `snack-warehouse`；
 - **默认就地安装**：程序与静态资源放在 `install.sh` 所在目录（即 `dist/`），数据库放在其下的 `data/` 子目录；
-- 如需安装到其他路径，通过 `INSTALL_DIR` / `DATA_DIR` 环境变量覆盖；
-- 首次安装生成 `/etc/snack-warehouse.env`（root 600），升级时保留已有配置；
+- 路径由脚本自动推导，**不通过环境变量设置核心路径**（`INSTALL_DIR`/`DATA_DIR`/`SNACK_DB_PATH`/`STATIC_DIR` 等环境变量不再生效）；
+- 首次安装生成 `/etc/snack-warehouse.env`（root 600，仅保留 PORT/HOST/ADMIN_USERNAME/ADMIN_PASSWORD），升级时保留已有配置；
 - 写入 `/etc/systemd/system/snack-warehouse.service`（`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写），设为开机自启并启动；
 - 通过 `curl` 做启动健康检查。
-
-安装/卸载路径可用环境变量覆盖（两端需一致）：`INSTALL_DIR`、`DATA_DIR`、`ENV_FILE`、`SERVICE_NAME`、`RUN_USER`。
 
 常用运维命令：
 
@@ -124,15 +125,13 @@ sudoedit /etc/snack-warehouse.env    # 改端口/初始管理员等，保存后�
 卸载：
 
 ```bash
-cd dist                          # 或你安装时所在的目录
+cd dist                          # 进入安装时所在的目录（即 dist/）
 sudo ./uninstall.sh            # 移除服务与程序，保留配置和数据库
 sudo ./uninstall.sh --purge    # 连同配置、数据库、运行用户一并删除（会二次确认）
 sudo ./uninstall.sh --purge --yes
 ```
 
 > 整个 `dist/` 文件夹可拷贝到任意服务器路径，进入后执行 `./run.sh` 即可直接运行；如需 systemd 托管，在该目录下执行 `sudo ./install.sh`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行 `PORT`（默认 3000/tcp）。
-
-> 安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行 `PORT`（默认 3000/tcp）。
 
 ## API 概览
 
