@@ -45,11 +45,15 @@ snack-warehouse-management/
 前置要求：Rust 工具链（cargo）、Node.js + npm。
 
 ```bash
-# 1) 一键编译（npm install + ng build → 产物拷贝到 backend/static/ → cargo build，可重复执行）
+# 1) 一键编译（npm install + ng build → 产物输出到 dist/，含后端二进制、static/、三部署脚本，可重复执行）
 ./build.sh
 
-# 2) 一键运行（必要时会先自动 ./build.sh；默认监听 0.0.0.0:3000，Ctrl-C 停止）
+# 2) 进入产物目录运行（默认监听 0.0.0.0:3000，Ctrl-C 停止）
+cd dist
 ./run.sh
+
+# 如需部署到任意路径，直接把整个 dist/ 文件夹拷贝过去，再执行 ./run.sh 即可
+# 数据库默认写入当前目录下的 data/app.db（可通过 SNACK_DB_PATH 覆盖）
 ```
 
 浏览器访问 <http://127.0.0.1:3000> 即可使用。`run.sh` 同时打印局域网地址（如 `http://192.168.x.x:3000`），手机/其他电脑可直接打开。
@@ -65,13 +69,13 @@ snack-warehouse-management/
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `SNACK_DB_PATH` | `data/app.db` | SQLite 数据库文件路径（`data/` 已被 .gitignore 忽略） |
-| `STATIC_DIR` | `backend/static` | 静态资源目录（编译期按仓库路径解析，与 cwd 无关） |
+| `STATIC_DIR` | `static`（当前工作目录下） | 静态资源目录，默认与二进制同目录的 `static/`；可通过环境变量指向任意路径 |
 | `HOST` | `0.0.0.0` | 监听地址，默认监听所有网卡（局域网可直接远程访问）；仅本机访问可设 `127.0.0.1` |
 | `PORT` | `3000` | 监听端口 |
 | `ADMIN_USERNAME` | `admin` | 首次启动自动初始化的管理员用户名 |
 | `ADMIN_PASSWORD` | `admin123` | 首次启动自动初始化的管理员密码 |
 
-经 `./run.sh` 启动时，脚本会为未设置的变量填入上表默认值，并把相对路径（如 `data/app.db`）按仓库根目录解析。
+经 `./run.sh` 启动时，脚本会为未设置的变量填入上表默认值，并把相对路径（如 `data/app.db`）按**当前工作目录**解析。
 
 ### 远程无法访问？
 
@@ -100,7 +104,8 @@ sudo PROFILE=release ./install.sh    # 使用 release 后端（仍会先构建�
 
 - 以仓库所有者身份执行 `./build.sh`（避免在 `target/` 下留下 root 所有的文件）；
 - 创建无登录 shell 的系统用户 `snack-warehouse`；
-- 程序与静态资源装到 `/opt/snack-warehouse`，数据库放 `/var/lib/snack-warehouse/app.db`；
+- **默认就地安装**：程序与静态资源放在 `install.sh` 所在目录（即 `dist/`），数据库放在其下的 `data/` 子目录；
+- 如需安装到其他路径，通过 `INSTALL_DIR` / `DATA_DIR` 环境变量覆盖；
 - 首次安装生成 `/etc/snack-warehouse.env`（root 600），升级时保留已有配置；
 - 写入 `/etc/systemd/system/snack-warehouse.service`（`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写），设为开机自启并启动；
 - 通过 `curl` 做启动健康检查。
@@ -119,10 +124,13 @@ sudoedit /etc/snack-warehouse.env    # 改端口/初始管理员等，保存后�
 卸载：
 
 ```bash
+cd dist                          # 或你安装时所在的目录
 sudo ./uninstall.sh            # 移除服务与程序，保留配置和数据库
 sudo ./uninstall.sh --purge    # 连同配置、数据库、运行用户一并删除（会二次确认）
 sudo ./uninstall.sh --purge --yes
 ```
+
+> 整个 `dist/` 文件夹可拷贝到任意服务器路径，进入后执行 `./run.sh` 即可直接运行；如需 systemd 托管，在该目录下执行 `sudo ./install.sh`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行 `PORT`（默认 3000/tcp）。
 
 > 安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行 `PORT`（默认 3000/tcp）。
 

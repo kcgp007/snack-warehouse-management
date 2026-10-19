@@ -8,8 +8,8 @@
 #   sudo ./install.sh --help
 #
 # 安装位置（可用环境变量覆盖）：
-#   INSTALL_DIR=/opt/snack-warehouse       程序与静态资源
-#   DATA_DIR=/var/lib/snack-warehouse      数据库目录
+#   INSTALL_DIR=<install.sh所在目录>  程序与静态资源（默认当前目录）
+#   DATA_DIR=<install.sh所在目录>/data   数据库目录（默认当前目录下的 data/）
 #   ENV_FILE=/etc/snack-warehouse.env      环境变量配置（root 600）
 #   SERVICE_NAME=snack-warehouse           systemd 服务名
 #   RUN_USER=snack-warehouse               运行服务的系统用户
@@ -18,8 +18,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/snack-warehouse}"
-DATA_DIR="${DATA_DIR:-/var/lib/snack-warehouse}"
+INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+DATA_DIR="${DATA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data}"
 ENV_FILE="${ENV_FILE:-/etc/snack-warehouse.env}"
 RUN_USER="${RUN_USER:-snack-warehouse}"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -107,30 +107,46 @@ run_builder() {
   fi
 }
 
-if [ "$SKIP_BUILD" -eq 0 ]; then
+# 定位产物：优先脚本所在目录（dist 就地运行），再回退到源码仓库布局
+if [ -x "$ROOT_DIR/snack-warehouse-backend" ]; then
+  BIN_SRC="$ROOT_DIR/snack-warehouse-backend"
+  BUILD_LAYOUT=dist
+else
+  BIN_SRC="$ROOT_DIR/backend/target/$PROFILE/snack-warehouse-backend"
+  BUILD_LAYOUT=repo
+fi
+if [ -d "$ROOT_DIR/static" ]; then
+  STATIC_SRC="$ROOT_DIR/static"
+else
+  STATIC_SRC="$ROOT_DIR/backend/static"
+fi
+
+# 仅在源码仓库布局下才需要编译；dist 就地运行时二进制与静态资源已齐全
+if [ "$BUILD_LAYOUT" = "repo" ] && [ "$SKIP_BUILD" -eq 0 ]; then
   echo "[install] 编译前后端（./build.sh）…"
-  run_builder "cd $(printf '%q' "$ROOT_DIR") && ./build.sh"
+  run_builder "$ROOT_DIR/build.sh"
+  # 编译后重新定位（dist 可能被 build.sh 重新生成）
+  if [ -x "$ROOT_DIR/dist/snack-warehouse-backend" ]; then
+    BIN_SRC="$ROOT_DIR/dist/snack-warehouse-backend"
+    STATIC_SRC="$ROOT_DIR/dist/static"
+    BUILD_LAYOUT=dist
+    ROOT_DIR="$ROOT_DIR/dist"
+  fi
   if [ "$PROFILE" = "release" ]; then
     echo "[install] 编译 release 后端…"
-    run_builder "cd $(printf '%q' "$ROOT_DIR/backend") && cargo build --release"
+    run_builder "cd $(printf '%q' "$ROOT_DIR")/../backend && cargo build --release"
   fi
 fi
 
-BIN_SRC="$ROOT_DIR/backend/target/$PROFILE/snack-warehouse-backend"
-STATIC_SRC="$ROOT_DIR/backend/static"
 if [ ! -x "$BIN_SRC" ]; then
   echo "错误：找不到后端二进制 $BIN_SRC" >&2
-  if [ "$PROFILE" = "release" ]; then
-    echo "       请先运行 ./build.sh，再在 backend/ 下执行 cargo build --release；或去掉 --no-build。" >&2
-  else
-    echo "       请先运行 ./build.sh（或去掉 --no-build）。" >&2
-  fi
+  echo "       请先运行 ./build.sh 生成产物，或将本脚本置于 dist/ 目录中就地运行。" >&2
   exit 1
 fi
 
 if [ ! -f "$STATIC_SRC/index.html" ]; then
   echo "错误：找不到前端静态资源 $STATIC_SRC/index.html" >&2
-  echo "       请先运行 ./build.sh（或去掉 --no-build）。" >&2
+  echo "       请先运行 ./build.sh 生成产物。" >&2
   exit 1
 fi
 
@@ -153,13 +169,20 @@ if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
 fi
 
 # 3) 安装程序与静态资源（可重复执行，静态资源整体替换）
-install -d -m 755 "$INSTALL_DIR"
-install -m 755 "$BIN_SRC" "$INSTALL_DIR/snack-warehouse-backend"
-rm -rf "$INSTALL_DIR/static"
-install -d -m 755 "$INSTALL_DIR/static"
-cp -a "$STATIC_SRC/." "$INSTALL_DIR/static/"
-chmod -R a+rX "$INSTALL_DIR/static"
-install -m 644 "$ROOT_DIR/README.md" "$INSTALL_DIR/README.md"
+# 就地运行（INSTALL_DIR == 脚本所在目录）时跳过自复制，避免 rm -rf 误删源文件
+if [ "$(cd "$INSTALL_DIR" && pwd)" = "$(cd "$ROOT_DIR" && pwd)" ]; then
+  echo "[install] 就地运行：$INSTALL_DIR（产物已就位，跳过自复制）"
+else
+  install -d -m 755 "$INSTALL_DIR"
+  install -m 755 "$BIN_SRC" "$INSTALL_DIR/snack-warehouse-backend"
+  rm -rf "$INSTALL_DIR/static"
+  install -d -m 755 "$INSTALL_DIR/static"
+  cp -a "$STATIC_SRC/." "$INSTALL_DIR/static/"
+  chmod -R a+rX "$INSTALL_DIR/static"
+  if [ -f "$ROOT_DIR/README.md" ]; then
+    install -m 644 "$ROOT_DIR/README.md" "$INSTALL_DIR/README.md"
+  fi
+fi
 
 # 4) 数据目录（升级时确保归属正确）
 install -d -m 750 "$DATA_DIR"

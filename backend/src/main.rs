@@ -2,7 +2,7 @@
 //!
 //! 环境变量（契约 §0/§1）：
 //! - `SNACK_DB_PATH`：SQLite 文件路径，默认 `data/app.db`（相对当前工作目录）；
-//! - `STATIC_DIR`：静态资源目录，默认编译期推导的 `backend/static`（与工作目录无关）；
+//! - `STATIC_DIR`：静态资源目录，默认当前工作目录下的 `static`（部署时随二进制同目录）；
 //! - `ADMIN_USERNAME` / `ADMIN_PASSWORD`：admin 自动初始化的覆盖账号（默认 admin / admin123）；
 //! - `HOST`（默认 `0.0.0.0`，监听所有网卡以便局域网远程访问）/ `PORT`（默认 `3000`）。
 
@@ -21,10 +21,7 @@ fn env_path(key: &str, default: PathBuf) -> PathBuf {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = env_path("SNACK_DB_PATH", PathBuf::from("data/app.db"));
-    let static_dir = env_path(
-        "STATIC_DIR",
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"),
-    );
+    let static_dir = env_path("STATIC_DIR", PathBuf::from("static"));
     let host = std::env::var("HOST")
         .ok()
         .filter(|value| !value.is_empty())
