@@ -30,6 +30,8 @@ snack-warehouse-management/
 ├── README.md        # 本文件
 ├── build.sh         # 一键编译脚本
 ├── run.sh           # 一键运行脚本（必要时先自动编译）
+├── install.sh       # 一键安装为 systemd 系统服务（开机自启）
+├── uninstall.sh     # 一键卸载系统服务（可选 --purge 删除数据）
 ├── backend/         # Rust 后端
 │   ├── src/         # main.rs（入口/环境变量）、lib.rs（路由装配）、auth/snacks/reminders/users/db/static_files...
 │   ├── tests/api.rs # 集成测试（tower::ServiceExt::oneshot，无需真实端口）
@@ -83,6 +85,46 @@ snack-warehouse-management/
 - 首次启动时若库中不存在同名用户，会自动创建默认管理员：**用户名 `admin` / 密码 `admin123`**（启动日志会打印一行提示）。
 - 初始化是幂等的：**已存在的同名用户绝不会被覆盖或重置密码**；可通过 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 覆盖初始账号。
 - ⚠️ **请在首次登录后立即通过 `/change-password` 修改默认密码**，不要在生产环境保留 `admin123`。
+
+## 系统级安装（systemd）
+
+Linux + systemd 环境可把应用安装为系统级守护进程（开机自启、崩溃自动重启），需要 root：
+
+```bash
+sudo ./install.sh                    # 编译 + 安装/升级
+sudo ./install.sh --no-build         # 使用现有编译产物
+sudo PROFILE=release ./install.sh    # 使用 release 后端（仍会先构建前端）
+```
+
+安装脚本会：
+
+- 以仓库所有者身份执行 `./build.sh`（避免在 `target/` 下留下 root 所有的文件）；
+- 创建无登录 shell 的系统用户 `snack-warehouse`；
+- 程序与静态资源装到 `/opt/snack-warehouse`，数据库放 `/var/lib/snack-warehouse/app.db`；
+- 首次安装生成 `/etc/snack-warehouse.env`（root 600），升级时保留已有配置；
+- 写入 `/etc/systemd/system/snack-warehouse.service`（`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写），设为开机自启并启动；
+- 通过 `curl` 做启动健康检查。
+
+安装/卸载路径可用环境变量覆盖（两端需一致）：`INSTALL_DIR`、`DATA_DIR`、`ENV_FILE`、`SERVICE_NAME`、`RUN_USER`。
+
+常用运维命令：
+
+```bash
+sudo systemctl status snack-warehouse
+sudo systemctl restart snack-warehouse
+sudo journalctl -u snack-warehouse -f
+sudoedit /etc/snack-warehouse.env    # 改端口/初始管理员等，保存后重启服务生效
+```
+
+卸载：
+
+```bash
+sudo ./uninstall.sh            # 移除服务与程序，保留配置和数据库
+sudo ./uninstall.sh --purge    # 连同配置、数据库、运行用户一并删除（会二次确认）
+sudo ./uninstall.sh --purge --yes
+```
+
+> 安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行 `PORT`（默认 3000/tcp）。
 
 ## API 概览
 
