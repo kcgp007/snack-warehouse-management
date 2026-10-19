@@ -88,8 +88,9 @@ export PORT HOST ADMIN_USERNAME ADMIN_PASSWORD
 # 相对路径（如默认 data/app.db）统一相对仓库根目录解析
 cd "$ROOT_DIR"
 
+DB_PATH="$ROOT_DIR/data/app.db"
 echo "[run] 启动后端：$BACKEND_BIN"
-echo "[run] 数据库：$SNACK_DB_PATH（STATIC_DIR=$STATIC_DIR）"
+echo "[run] 数据库：$DB_PATH（STATIC_DIR=$STATIC_DIR）"
 echo "[run] 运行目录：$ROOT_DIR"
 "$BACKEND_BIN" &
 child=$!
@@ -327,8 +328,6 @@ if [ ! -f "$ENV_FILE" ]; then
 # 修改后执行：sudo systemctl restart $SERVICE_NAME
 HOST=0.0.0.0
 PORT=3000
-STATIC_DIR=$INSTALL_DIR/static
-SNACK_DB_PATH=$DATA_DIR/app.db
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin123
 ENV_EOF
@@ -340,20 +339,7 @@ else
 fi
 
 # 6) systemd unit
-# 若用户在配置文件中自定义了数据库路径，把其目录一并加入可写路径。
-DB_PATH="$(sed -n 's/^[[:space:]]*SNACK_DB_PATH[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)"
 READ_WRITE_PATHS="$DATA_DIR"
-case "$DB_PATH" in
-  /*)
-    DB_DIR="$(dirname "$DB_PATH")"
-    if [ -n "$DB_DIR" ] && [ "$DB_DIR" != "$DATA_DIR" ]; then
-      if [ ! -d "$DB_DIR" ]; then
-        echo "[install] 警告：配置的数据库目录 $DB_DIR 不存在，服务可能启动失败。" >&2
-      fi
-      READ_WRITE_PATHS="$READ_WRITE_PATHS $DB_DIR"
-    fi
-    ;;
-esac
 
 echo "[install] 写入 systemd 服务：$UNIT_FILE"
 cat > "$UNIT_FILE" <<UNIT_EOF

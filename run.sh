@@ -55,8 +55,9 @@ export PORT HOST ADMIN_USERNAME ADMIN_PASSWORD
 # 相对路径（如默认 data/app.db）统一相对仓库根目录解析
 cd "$ROOT_DIR"
 
+DB_PATH="$ROOT_DIR/data/app.db"
 echo "[run] 启动后端：$BACKEND_BIN"
-echo "[run] 数据库：$SNACK_DB_PATH（STATIC_DIR=$STATIC_DIR）"
+echo "[run] 数据库：$DB_PATH（STATIC_DIR=$STATIC_DIR）"
 "$BACKEND_BIN" &
 child=$!
 if [ "$HOST" = "0.0.0.0" ] || [ "$HOST" = "::" ]; then
