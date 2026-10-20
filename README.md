@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **零食库存管理**：名称、数量、存放位置、购买日期、生产日期、保质期（天）、过期日期、备注；**生产日期 / 保质期 / 过期日期填任意两项自动计算第三项**（三项矛盾会被拒绝）；支持按名称/备注搜索、按存放位置筛选；位置输入带**已有位置自动补全**（`GET /api/locations?q=`，可点击快选或自由输入）。
+- **零食库存管理**：名称、数量、存放位置、购买日期、生产日期、保质期（支持天/月/年单位）、过期日期、备注；**生产日期 / 保质期 / 过期日期填任意两项自动计算第三项**（三项矛盾会被拒绝）；支持按名称/备注搜索、按存放位置筛选；位置输入带**已有位置自动补全**（`GET /api/locations?q=`，可点击快选或自由输入）。
 - **双重状态维度**：
   - 过期状态（基于过期日期）：已过期 / ≤7 天 / 正常 / 无过期日期；
   - 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完），并记录打开日期、吃完日期（契约 v2：纯 `YYYY-MM-DD`；状态选“已吃完”而吃完日期留空时由服务端自动填充当前本地日期），支持一键“标记打开 / 标记吃完”。
@@ -160,7 +160,7 @@ sudo ./uninstall.sh --purge --yes
 | `GET /api/auth/me` | 当前用户对象 |
 | `POST /api/auth/change-password` | `{"old_password","new_password"}` → `204`；新密码 <6 字符 → `400` |
 | `GET /api/snacks` | 查询参数 `q`/`location`/`expiry_status`(all\|ok\|expiring\|expired)/`status`(all\|in_stock\|opened\|finished)，返回**裸数组** |
-| `POST /api/snacks` | 创建零食，`201`；校验失败 `400`；`production_date`/`opened_at`/`finished_at` 只接受 `YYYY-MM-DD`（传 `YYYY-MM-DDTHH:MM` → `400`）；`production_date`+`shelf_life_days`+`expiry_date` 填两项自动算第三项，三项矛盾 → `400`；`status="finished"` 且未带 `finished_at` 时服务端自动填充当前本地日期 |
+| `POST /api/snacks` | 创建零食，`201`；校验失败 `400`；`production_date`/`opened_at`/`finished_at` 只接受 `YYYY-MM-DD`（传 `YYYY-MM-DDTHH:MM` → `400`）；`production_date`+`shelf_life_days`+`expiry_date` 填两项自动算第三项，三项矛盾 → `400`；`shelf_life_unit` 可选 `day/month/year`（1 月 = 30 天、1 年 = 365 天，仅用于换算与回显）；`status="finished"` 且未带 `finished_at` 时服务端自动填充当前本地日期 |
 | `PUT /api/snacks/{id}` | 更新，`200`；不存在 `404`；日期校验同创建 |
 | `DELETE /api/snacks/{id}` | `204`；不存在 `404` |
 | `GET /api/locations` | 存放位置去重数组（字典序）；可选 `q` 做子串包含过滤，缺省/空串返回全部 |
@@ -169,7 +169,7 @@ sudo ./uninstall.sh --purge --yes
 | `DELETE /api/users/{id}` | `204`；删除自己 `400 {"error":"不能删除当前登录账户"}`；不存在 `404` |
 | 非 `/api` 路径 | 托管静态文件；磁盘无对应文件时回退 `index.html`（SPA fallback） |
 
-启动时会幂等迁移旧库：自动补 `production_date`/`shelf_life_days` 列；生命周期时间 `YYYY-MM-DDTHH:MM` 截取前 10 位为纯日期，非法值置 `NULL`；清理过期会话。
+启动时会幂等迁移旧库：自动补 `production_date`/`shelf_life_days`/`shelf_life_unit` 列；生命周期时间 `YYYY-MM-DDTHH:MM` 截取前 10 位为纯日期，非法值置 `NULL`；清理过期会话。
 
 完整契约见 [`CONTRACT.md`](CONTRACT.md)。
 

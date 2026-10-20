@@ -17,9 +17,12 @@ use crate::AppState;
 /// 生命周期状态枚举（契约 §1 snacks.status）。
 pub(crate) const LIFECYCLE_STATUSES: [&str; 3] = ["in_stock", "opened", "finished"];
 
+/// 保质期单位（仅用于前端展示；换算规则固定为 1 月 = 30 天、1 年 = 365 天）。
+pub(crate) const SHELF_LIFE_UNITS: [&str; 3] = ["day", "month", "year"];
+
 pub(crate) const SELECT_COLUMNS: &str = "id, name, quantity, location, purchase_date, \
-     production_date, shelf_life_days, expiry_date, opened_at, finished_at, status, notes, \
-     created_at, updated_at";
+     production_date, shelf_life_days, shelf_life_unit, expiry_date, opened_at, finished_at, \
+     status, notes, created_at, updated_at";
 
 /// 保质期上限（100 年），避免日期运算溢出与明显不合理的数据。
 const MAX_SHELF_LIFE_DAYS: i64 = 36_500;
@@ -34,6 +37,7 @@ pub struct Snack {
     pub purchase_date: Option<String>,
     pub production_date: Option<String>,
     pub shelf_life_days: Option<i64>,
+    pub shelf_life_unit: String,
     pub expiry_date: Option<String>,
     pub opened_at: Option<String>,
     pub finished_at: Option<String>,
@@ -52,6 +56,7 @@ pub(crate) struct SnackInputRaw {
     pub purchase_date: Option<String>,
     pub production_date: Option<String>,
     pub shelf_life_days: Option<i64>,
+    pub shelf_life_unit: Option<String>,
     pub expiry_date: Option<String>,
     pub opened_at: Option<String>,
     pub finished_at: Option<String>,
@@ -68,6 +73,7 @@ pub(crate) struct SnackInput {
     pub purchase_date: Option<String>,
     pub production_date: Option<String>,
     pub shelf_life_days: Option<i64>,
+    pub shelf_life_unit: String,
     pub expiry_date: Option<String>,
     pub opened_at: Option<String>,
     pub finished_at: Option<String>,
@@ -114,6 +120,15 @@ fn validate(raw: SnackInputRaw) -> Result<SnackInput, ApiError> {
             )));
         }
     }
+    let shelf_life_unit = match raw.shelf_life_unit.as_deref().map(str::trim) {
+        None | Some("") => "day".to_string(),
+        Some(unit) if SHELF_LIFE_UNITS.contains(&unit) => unit.to_string(),
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "shelf_life_unit 必须为 day、month 或 year",
+            ))
+        }
+    };
     let mut expiry_date = optional_date(raw.expiry_date, "expiry_date")?;
     derive_production_shelf_expiry(&mut production_date, &mut shelf_life_days, &mut expiry_date)?;
     let opened_at = optional_date(raw.opened_at, "opened_at")?;
@@ -136,6 +151,7 @@ fn validate(raw: SnackInputRaw) -> Result<SnackInput, ApiError> {
         purchase_date,
         production_date,
         shelf_life_days,
+        shelf_life_unit,
         expiry_date,
         opened_at,
         finished_at,
@@ -215,13 +231,14 @@ pub(crate) fn row_to_snack(row: &Row) -> rusqlite::Result<Snack> {
         purchase_date: row.get(4)?,
         production_date: row.get(5)?,
         shelf_life_days: row.get(6)?,
-        expiry_date: row.get(7)?,
-        opened_at: row.get(8)?,
-        finished_at: row.get(9)?,
-        status: row.get(10)?,
-        notes: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        shelf_life_unit: row.get(7)?,
+        expiry_date: row.get(8)?,
+        opened_at: row.get(9)?,
+        finished_at: row.get(10)?,
+        status: row.get(11)?,
+        notes: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -334,9 +351,9 @@ pub(crate) async fn create(
     let conn = state.conn();
     conn.execute(
         "INSERT INTO snacks (name, quantity, location, purchase_date, production_date, \
-         shelf_life_days, expiry_date, opened_at, finished_at, status, notes, created_at, \
-         updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+         shelf_life_days, shelf_life_unit, expiry_date, opened_at, finished_at, status, notes, \
+         created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
         params![
             input.name,
             input.quantity,
@@ -344,6 +361,7 @@ pub(crate) async fn create(
             input.purchase_date,
             input.production_date,
             input.shelf_life_days,
+            input.shelf_life_unit,
             input.expiry_date,
             input.opened_at,
             input.finished_at,
@@ -373,8 +391,9 @@ pub(crate) async fn update(
     let conn = state.conn();
     let affected = conn.execute(
         "UPDATE snacks SET name = ?1, quantity = ?2, location = ?3, purchase_date = ?4, \
-         production_date = ?5, shelf_life_days = ?6, expiry_date = ?7, opened_at = ?8, \
-         finished_at = ?9, status = ?10, notes = ?11, updated_at = ?12 WHERE id = ?13",
+         production_date = ?5, shelf_life_days = ?6, shelf_life_unit = ?7, expiry_date = ?8, \
+         opened_at = ?9, finished_at = ?10, status = ?11, notes = ?12, updated_at = ?13 \
+         WHERE id = ?14",
         params![
             input.name,
             input.quantity,
@@ -382,6 +401,7 @@ pub(crate) async fn update(
             input.purchase_date,
             input.production_date,
             input.shelf_life_days,
+            input.shelf_life_unit,
             input.expiry_date,
             input.opened_at,
             input.finished_at,

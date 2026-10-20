@@ -75,7 +75,7 @@
           <td>{{ snack.location }}</td>
           <td>{{ snack.purchase_date ?? '—' }}</td>
           <td>{{ snack.production_date ?? '—' }}</td>
-          <td>{{ snack.shelf_life_days === null ? '—' : snack.shelf_life_days + ' 天' }}</td>
+          <td>{{ shelfLifeLabelOf(snack) }}</td>
           <td>{{ snack.expiry_date ?? '—' }}</td>
           <td>
             <span class="badge" [attr.data-status]="expiryBadgeOf(snack).cls">{{
@@ -231,24 +231,39 @@
             />
           </label>
           <label class="field">
-            <span>保质期（天）</span>
-            <input
-              name="shelf_life_days"
-              type="number"
-              min="0"
-              max="36500"
-              step="1"
-              placeholder="如 180"
-              [class.invalid]="touched().shelf_life_days && fieldError('shelf_life_days')"
-              [attr.aria-invalid]="
-                touched().shelf_life_days && fieldError('shelf_life_days') ? 'true' : null
-              "
-              [ngModel]="form().shelf_life_days"
-              (ngModelChange)="onShelfLifeChange($event)"
-              (blur)="markTouched('shelf_life_days')"
-            />
-            @if (touched().shelf_life_days && fieldError('shelf_life_days')) {
-              <p class="field-error" role="alert">{{ fieldError('shelf_life_days') }}</p>
+            <span>保质期</span>
+            <div class="shelf-field">
+              <input
+                name="shelf_life_value"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="如 6"
+                [class.invalid]="
+                  touched().shelf_life_value && fieldError('shelf_life_value')
+                "
+                [attr.aria-invalid]="
+                  touched().shelf_life_value && fieldError('shelf_life_value')
+                    ? 'true'
+                    : null
+                "
+                [ngModel]="form().shelf_life_value"
+                (ngModelChange)="onShelfLifeChange($event)"
+                (blur)="markTouched('shelf_life_value')"
+              />
+              <select
+                name="shelf_life_unit"
+                aria-label="保质期单位"
+                [ngModel]="form().shelf_life_unit"
+                (ngModelChange)="onShelfLifeUnitChange($event)"
+              >
+                <option value="day">天</option>
+                <option value="month">月</option>
+                <option value="year">年</option>
+              </select>
+            </div>
+            @if (touched().shelf_life_value && fieldError('shelf_life_value')) {
+              <p class="field-error" role="alert">{{ fieldError('shelf_life_value') }}</p>
             }
           </label>
           <label class="field">
@@ -262,7 +277,7 @@
           </label>
         </div>
         <p class="form-hint">
-          生产日期、保质期（天）、过期日期：填写任意两项，第三项会自动计算。
+          生产日期、保质期、过期日期：填写任意两项，第三项会自动计算（1 月按 30 天、1 年按 365 天换算）。
         </p>
         @if (dateRangeError()) {
           <p class="field-error" role="alert">{{ dateRangeError() }}</p>

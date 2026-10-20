@@ -74,7 +74,8 @@
 | location | TEXT NOT NULL | 存放位置，自由文本，如 `客厅/零食柜/第二层` |
 | purchase_date | TEXT | 购买日期 `YYYY-MM-DD`，可空 |
 | production_date | TEXT | 生产日期 `YYYY-MM-DD`，可空（v3 新增） |
-| shelf_life_days | INTEGER | 保质期（天），`0..=36500`，可空（v3 新增） |
+| shelf_life_days | INTEGER | 保质期换算后的天数，`0..=36500`，可空（v3 新增） |
+| shelf_life_unit | TEXT NOT NULL DEFAULT 'day' | 保质期展示单位：`day` / `month` / `year`；仅影响输入换算与展示（1 月 = 30 天、1 年 = 365 天）（v3 新增） |
 | expiry_date | TEXT | 过期日期 `YYYY-MM-DD`，可空 |
 | opened_at | TEXT | 打开日期 `YYYY-MM-DD`（服务器本地日期，**纯日期，无时间部分**），**非必填**，可空 |
 | finished_at | TEXT | 吃完日期 `YYYY-MM-DD`（纯日期），可空 |
@@ -85,9 +86,9 @@
 
 **存量数据迁移（v2 必做，幂等）**：v1 时代写入的 `opened_at`/`finished_at` 若为 `YYYY-MM-DDTHH:MM`（或更长格式），后端启动迁移时统一**截取前 10 位**规范化为 `YYYY-MM-DD`（非法且无法截取的值置 NULL）；迁移必须幂等，重复启动无副作用。启动后所有读写路径只接受/输出 `YYYY-MM-DD`。
 
-**存量数据迁移（v3，幂等）**：旧库启动时通过 `PRAGMA table_info` 检测并 `ALTER TABLE` 补齐 `production_date` / `shelf_life_days` 列，已有数据两列为 NULL。
+**存量数据迁移（v3，幂等）**：旧库启动时通过 `PRAGMA table_info` 检测并 `ALTER TABLE` 补齐 `production_date` / `shelf_life_days` / `shelf_life_unit` 列；已有记录前两列为 NULL，单位为 `day`。
 
-**生产日期 / 保质期 / 过期日期联动**：三项均可空；**填任意两项时服务端自动计算第三项**（生产日期 + 保质期 → 过期日期；生产日期 + 过期日期 → 保质期天数；保质期 + 过期日期 → 生产日期）。三项都填且互不自洽 → 400 `{"error":"生产日期、保质期与过期日期不一致"}`；过期日期早于生产日期 → 400 `{"error":"过期日期不能早于生产日期"}`；保质期不在 `0..=36500` → 400。前端以用户最后修改的字段为准覆盖另一项，保证界面上三项始终自洽。
+**生产日期 / 保质期 / 过期日期联动**：三项均可空；**填任意两项时服务端自动计算第三项**（生产日期 + 保质期 → 过期日期；生产日期 + 过期日期 → 保质期天数；保质期 + 过期日期 → 生产日期）。三项都填且互不自洽 → 400 `{"error":"生产日期、保质期与过期日期不一致"}`；过期日期早于生产日期 → 400 `{"error":"过期日期不能早于生产日期"}`；保质期不在 `0..=36500` → 400。前端以用户最后修改的字段为准覆盖另一项，保证界面上三项始终自洽。保质期支持 `天 / 月 / 年` 单位选择，写入 API 时统一换算为 `shelf_life_days`（1 月 = 30 天、1 年 = 365 天），同时保存 `shelf_life_unit` 供界面按原单位回显；由日期反推保质期时回退为 `day`。
 
 ## 2. 认证方式
 
@@ -119,14 +120,15 @@
 // SnackInput（POST/PUT 通用；所有日期字段均为 YYYY-MM-DD，可为 null）
 { "name": "string(必填,非空)", "quantity": 1, "location": "string(必填,非空)",
   "purchase_date": "2026-01-05", "production_date": null,
-  "shelf_life_days": null, "expiry_date": null, "notes": null,
+  "shelf_life_days": null, "shelf_life_unit": "day",
+  "expiry_date": null, "notes": null,
   // 以下为新增字段，均可省略；省略时 status 默认 'in_stock'，两个日期为 null
   "status": "in_stock",          // 可选值 in_stock|opened|finished，非法值 400
   "opened_at": null,              // 打开日期 YYYY-MM-DD，非必填
   "finished_at": null }           // 吃完日期 YYYY-MM-DD
 // Snack = SnackInput + { "id": 1, "created_at": "...", "updated_at": "..." }
 ```
-校验失败（缺字段、quantity<0、`purchase_date`/`production_date`/`expiry_date`/`opened_at`/`finished_at` 任一格式非 `YYYY-MM-DD`（v2 起**不再接受** `YYYY-MM-DDTHH:MM`，传入即 400）、`shelf_life_days` 非整数或越界、三项日期互不自洽、status 非法）→ 400 `{"error":...}`。
+校验失败（缺字段、quantity<0、`purchase_date`/`production_date`/`expiry_date`/`opened_at`/`finished_at` 任一格式非 `YYYY-MM-DD`（v2 起**不再接受** `YYYY-MM-DDTHH:MM`，传入即 400）、`shelf_life_days` 非整数或越界、`shelf_life_unit` 非 `day/month/year`、三项日期互不自洽、status 非法）→ 400 `{"error":...}`。
 服务端规则：`status="finished"` 且请求未带 `finished_at` 时，服务端自动填充**当前本地日期 `YYYY-MM-DD`**；`finished_at` 仅在 `status="finished"` 时有意义（其他状态下携带可保存但不强制清除，前后端 UI 不应展示矛盾数据）。
 
 ### 过期提醒
@@ -150,11 +152,11 @@
 
 页面（standalone components + Router + guards）：
 1. **/login 登录页**：用户名/密码，错误提示。
-2. **/ 零食库存**（需登录）：表格列 = 名称、数量、存放位置、购买日期、**生产日期**、**保质期（天）**、过期日期、**过期状态徽章**、**生命周期状态徽章**、**打开日期**、**吃完日期**、备注、操作(编辑/删除)。
+2. **/ 零食库存**（需登录）：表格列 = 名称、数量、存放位置、购买日期、**生产日期**、**保质期（按单位显示）**、过期日期、**过期状态徽章**、**生命周期状态徽章**、**打开日期**、**吃完日期**、备注、操作(编辑/删除)。
    - 过期状态徽章（基于 expiry_date）：已过期=红、≤7天=橙、正常=绿、无过期日期=灰。
    - 生命周期状态徽章（status）：`in_stock`=蓝(未打开)、`opened`=紫(已打开)、`finished`=灰(已吃完)。
    - 顶部筛选：搜索框、存放位置下拉（来自 `/api/locations`）、过期状态筛选（请求参数 `expiry_status`）、生命周期状态筛选（请求参数 `status`)、"+ 添加零食"按钮（弹窗或表单页均可）。
-   - 编辑/添加表单字段含：生产日期、保质期（天）、过期日期（三者填任意两项自动计算第三项，并即时提示日期矛盾）、状态下拉、打开日期（**`type="date"` 输入，选填**）、吃完日期（`type="date"`，选填；状态选"已吃完"且吃完日期留空时由后端自动填充）。
+   - 编辑/添加表单字段含：生产日期、保质期（数值 + `天/月/年` 单位）、过期日期（三者填任意两项自动计算第三项，并即时提示日期矛盾）、状态下拉、打开日期（**`type="date"` 输入，选填**）、吃完日期（`type="date"`，选填；状态选"已吃完"且吃完日期留空时由后端自动填充）。
    - **存放位置输入框自动补全（v2 必做）**：输入过程中按**已输入字符**调用 `GET /api/locations?q=<已输入文本>`，在输入框下方回显匹配的已有位置列表（防抖即可，非强制），**点击可快选填入**；同时必须仍允许输入全新位置自由保存（自动补全只是回显建议，不做强制约束）。筛选栏的存放位置下拉沿用 `GET /api/locations`（无 `q`）。
    - 建议在操作列提供快捷动作："标记打开"（status→opened，opened_at 取当前日期）与"标记吃完"（status→finished，finished_at 取当前日期），即一次 PUT 请求完成。
    - **整体美化（v2 验收项）**：统一配色/字号/间距/圆角/阴影，徽章与按钮风格一致，表格行悬停与斑马纹，空状态与加载态提示，表单校验错误即时可见，桌面与窄屏（移动）布局均不破版；中文界面文案统一。
@@ -171,6 +173,6 @@
 
 ## 5. 各 lane 验证要求（必须在报告中附命令与输出摘要）
 
-- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**、**v3：生产日期/保质期/过期日期任意两项自动推导第三项、三项矛盾与过期早于生产 → 400、旧库自动补列且幂等**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
+- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**、**v3：生产日期/保质期/过期日期任意两项自动推导第三项、保质期单位保存与非法单位 400、三项矛盾与过期早于生产 → 400、旧库自动补列且幂等**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
 - 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误；**`npm test`（vitest）全绿**。
 - 集成：`./build.sh` 一键编译成功；`./run.sh` 一键运行后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback→Ctrl-C 干净退出（进程无残留）。

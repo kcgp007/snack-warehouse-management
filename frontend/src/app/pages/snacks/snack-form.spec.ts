@@ -5,6 +5,9 @@ import {
   deriveDates,
   formToSnackInput,
   lifecycleTimes,
+  shelfFormValue,
+  shelfLifeDays,
+  shelfLifeLabel,
 } from './snack-form';
 
 function baseForm(overrides: Partial<SnackFormModel> = {}): SnackFormModel {
@@ -14,7 +17,8 @@ function baseForm(overrides: Partial<SnackFormModel> = {}): SnackFormModel {
     location: ' 客厅/零食柜 ',
     purchase_date: '2024-01-01',
     production_date: '',
-    shelf_life_days: '',
+    shelf_life_value: '',
+    shelf_life_unit: 'day',
     expiry_date: '',
     notes: ' 辣味 ',
     status: 'in_stock',
@@ -110,16 +114,28 @@ describe('formToSnackInput', () => {
     expect(saved.purchase_date).toBe('2024-01-01');
     expect(saved.production_date).toBeNull();
     expect(saved.shelf_life_days).toBeNull();
+    expect(saved.shelf_life_unit).toBe('day');
     expect(saved.expiry_date).toBeNull();
   });
 
-  it('maps production_date and shelf_life_days to API types', () => {
-    const saved = formToSnackInput(
-      baseForm({ production_date: '2026-01-01', shelf_life_days: '30' }),
+  it('converts shelf life value by unit before submitting', () => {
+    const days = formToSnackInput(
+      baseForm({ production_date: '2026-01-01', shelf_life_value: '30' }),
     );
-    expect(saved.production_date).toBe('2026-01-01');
-    expect(saved.shelf_life_days).toBe(30);
-    expect(saved.expiry_date).toBeNull();
+    expect(days.production_date).toBe('2026-01-01');
+    expect(days.shelf_life_days).toBe(30);
+    expect(days.shelf_life_unit).toBe('day');
+    expect(days.expiry_date).toBeNull();
+
+    const months = formToSnackInput(
+      baseForm({ shelf_life_value: '6', shelf_life_unit: 'month' }),
+    );
+    expect(months.shelf_life_days).toBe(180);
+    expect(months.shelf_life_unit).toBe('month');
+
+    const years = formToSnackInput(baseForm({ shelf_life_value: '1', shelf_life_unit: 'year' }));
+    expect(years.shelf_life_days).toBe(365);
+    expect(years.shelf_life_unit).toBe('year');
   });
 });
 
@@ -136,28 +152,72 @@ describe('date helpers', () => {
   });
 });
 
+describe('shelfLifeDays / shelfLifeLabel', () => {
+  it('converts day/month/year with fixed 30/365 factors', () => {
+    expect(shelfLifeDays('6', 'day')).toBe(6);
+    expect(shelfLifeDays('6', 'month')).toBe(180);
+    expect(shelfLifeDays('1', 'year')).toBe(365);
+    expect(shelfLifeDays('', 'month')).toBeNull();
+    expect(shelfLifeDays('1.5', 'day')).toBeNull();
+    expect(shelfLifeDays('-1', 'day')).toBeNull();
+    expect(shelfLifeDays('101', 'year')).toBeNull();
+  });
+
+  it('restores the saved unit into the form only when divisible', () => {
+    expect(shelfFormValue(180, 'month')).toEqual({ value: '6', unit: 'month' });
+    expect(shelfFormValue(365, 'year')).toEqual({ value: '1', unit: 'year' });
+    expect(shelfFormValue(45, 'month')).toEqual({ value: '45', unit: 'day' });
+    expect(shelfFormValue(30, 'day')).toEqual({ value: '30', unit: 'day' });
+    expect(shelfFormValue(null, 'month')).toEqual({ value: '', unit: 'month' });
+  });
+
+  it('prints back the saved unit when divisible, otherwise days', () => {
+    expect(shelfLifeLabel(180, 'month')).toBe('6 个月');
+    expect(shelfLifeLabel(365, 'year')).toBe('1 年');
+    expect(shelfLifeLabel(45, 'month')).toBe('45 天');
+    expect(shelfLifeLabel(45, 'day')).toBe('45 天');
+    expect(shelfLifeLabel(null, 'day')).toBe('—');
+  });
+});
+
 describe('deriveDates（三项填两项自动算第三项）', () => {
   it('生产日期 + 保质期 → 过期日期', () => {
     expect(
       deriveDates(
-        baseForm({ production_date: '2026-01-01', shelf_life_days: '30' }),
+        baseForm({ production_date: '2026-01-01', shelf_life_value: '30' }),
         'production_date',
       ),
     ).toEqual({ expiry_date: '2026-01-31' });
   });
 
-  it('生产日期 + 过期日期 → 保质期', () => {
+  it('按月换算：生产日期 + 6 个月 → 过期日期', () => {
+    expect(
+      deriveDates(
+        baseForm({
+          production_date: '2026-01-01',
+          shelf_life_value: '6',
+          shelf_life_unit: 'month',
+        }),
+        'production_date',
+      ),
+    ).toEqual({ expiry_date: '2026-06-30' });
+  });
+
+  it('生产日期 + 过期日期 → 保质期（回退为天）', () => {
     expect(
       deriveDates(
         baseForm({ production_date: '2026-01-01', expiry_date: '2026-03-02' }),
         'production_date',
       ),
-    ).toEqual({ shelf_life_days: '60' });
+    ).toEqual({ shelf_life_value: '60', shelf_life_unit: 'day' });
   });
 
   it('保质期 + 过期日期 → 生产日期', () => {
     expect(
-      deriveDates(baseForm({ shelf_life_days: '30', expiry_date: '2026-01-31' }), 'expiry_date'),
+      deriveDates(
+        baseForm({ shelf_life_value: '30', expiry_date: '2026-01-31' }),
+        'expiry_date',
+      ),
     ).toEqual({ production_date: '2026-01-01' });
   });
 
@@ -166,7 +226,7 @@ describe('deriveDates（三项填两项自动算第三项）', () => {
       deriveDates(
         baseForm({
           production_date: '2026-02-01',
-          shelf_life_days: '10',
+          shelf_life_value: '10',
           expiry_date: '2026-01-11',
         }),
         'production_date',
@@ -179,12 +239,12 @@ describe('deriveDates（三项填两项自动算第三项）', () => {
       deriveDates(
         baseForm({
           production_date: '2026-01-01',
-          shelf_life_days: '10',
+          shelf_life_value: '10',
           expiry_date: '2026-01-21',
         }),
         'expiry_date',
       ),
-    ).toEqual({ shelf_life_days: '20' });
+    ).toEqual({ shelf_life_value: '20', shelf_life_unit: 'day' });
   });
 
   it('修改保质期时保留生产日期并重算过期日期', () => {
@@ -192,23 +252,42 @@ describe('deriveDates（三项填两项自动算第三项）', () => {
       deriveDates(
         baseForm({
           production_date: '2026-01-01',
-          shelf_life_days: '45',
+          shelf_life_value: '45',
           expiry_date: '2026-01-11',
         }),
-        'shelf_life_days',
+        'shelf_life',
       ),
     ).toEqual({ expiry_date: '2026-02-15' });
   });
 
-  it('只有一项或不完整/非法时不计算', () => {
-    expect(deriveDates(baseForm({ production_date: '2026-01-01' }), 'production_date')).toEqual(
-      {},
-    );
+  it('切换单位时保留数值并按新单位重算过期日期', () => {
     expect(
-      deriveDates(baseForm({ shelf_life_days: '-1', expiry_date: '2026-01-31' }), 'expiry_date'),
+      deriveDates(
+        baseForm({
+          production_date: '2026-01-01',
+          shelf_life_value: '6',
+          shelf_life_unit: 'month',
+        }),
+        'shelf_life',
+      ),
+    ).toEqual({ expiry_date: '2026-06-30' });
+  });
+
+  it('只有一项或不完整/非法时不计算', () => {
+    expect(
+      deriveDates(baseForm({ production_date: '2026-01-01' }), 'production_date'),
     ).toEqual({});
     expect(
-      deriveDates(baseForm({ production_date: '2026-02-30', shelf_life_days: '10' }), 'production_date'),
+      deriveDates(
+        baseForm({ shelf_life_value: '-1', expiry_date: '2026-01-31' }),
+        'expiry_date',
+      ),
+    ).toEqual({});
+    expect(
+      deriveDates(
+        baseForm({ production_date: '2026-02-30', shelf_life_value: '10' }),
+        'production_date',
+      ),
     ).toEqual({});
   });
 

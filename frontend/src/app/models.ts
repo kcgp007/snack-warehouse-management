@@ -16,6 +16,9 @@ export interface LoginResponse {
 /** 生命周期状态：in_stock 未打开 / opened 已打开 / finished 已吃完 */
 export type SnackLifecycle = 'in_stock' | 'opened' | 'finished';
 
+/** 保质期单位：天 / 月 / 年（1 月 = 30 天、1 年 = 365 天）。 */
+export type ShelfLifeUnit = 'day' | 'month' | 'year';
+
 /** 过期状态筛选（请求参数 expiry_status） */
 export type ExpiryStatusFilter = 'all' | 'ok' | 'expiring' | 'expired';
 
@@ -32,6 +35,8 @@ export interface SnackInput {
   production_date: string | null;
   /** 保质期（天），可为 null；与生产/过期日期任意两项可互相推导 */
   shelf_life_days: number | null;
+  /** 保质期单位，仅用于界面展示/输入换算 */
+  shelf_life_unit: ShelfLifeUnit;
   expiry_date: string | null;
   notes: string | null;
   status: SnackLifecycle;

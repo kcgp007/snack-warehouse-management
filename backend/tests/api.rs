@@ -720,6 +720,7 @@ async fn production_shelf_and_expiry_are_derived() {
     let milk = resp.json();
     assert_eq!(milk["production_date"], "2026-01-01");
     assert_eq!(milk["shelf_life_days"], 30);
+    assert_eq!(milk["shelf_life_unit"], "day");
     assert_eq!(milk["expiry_date"], "2026-01-31");
 
     // 生产日期 + 过期日期 → 保质期
@@ -755,6 +756,25 @@ async fn production_shelf_and_expiry_are_derived() {
     let biscuit = resp.json();
     assert_eq!(biscuit["production_date"], "2026-01-01");
     assert_eq!(biscuit["shelf_life_days"], 10);
+
+    // 保质期单位可调整：6 个月 = 180 天，单位随记录保存
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "按月", "quantity": 1, "location": "厨房",
+            "production_date": "2026-01-01", "shelf_life_days": 180,
+            "shelf_life_unit": "month"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let monthly = resp.json();
+    assert_eq!(monthly["shelf_life_days"], 180);
+    assert_eq!(monthly["shelf_life_unit"], "month");
+    assert_eq!(monthly["expiry_date"], "2026-06-30");
 
     // 三项齐全且自洽 → 保持原值
     let resp = send(
@@ -810,6 +830,7 @@ async fn production_shelf_and_expiry_are_derived() {
         json!({"name": "负数", "quantity": 1, "location": "客厅", "shelf_life_days": -1}),
         json!({"name": "过长", "quantity": 1, "location": "客厅", "shelf_life_days": 36_501}),
         json!({"name": "时间", "quantity": 1, "location": "客厅", "production_date": "2026-01-01T08:00"}),
+        json!({"name": "单位", "quantity": 1, "location": "客厅", "shelf_life_days": 30, "shelf_life_unit": "week"}),
     ] {
         let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(payload)).await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
@@ -844,6 +865,7 @@ async fn production_shelf_and_expiry_are_derived() {
         .expect("牛奶应在提醒中");
     assert_eq!(item["production_date"], "2026-02-01");
     assert_eq!(item["shelf_life_days"], 30);
+    assert_eq!(item["shelf_life_unit"], "day");
 }
 
 #[tokio::test]
@@ -892,6 +914,7 @@ async fn legacy_database_gets_production_and_shelf_columns() {
         .expect("旧库记录");
     assert!(old["production_date"].is_null());
     assert!(old["shelf_life_days"].is_null());
+    assert_eq!(old["shelf_life_unit"], "day");
 
     // 旧库行可通过 PUT 写入新字段并自动推导
     let id = old["id"].as_i64().unwrap();
@@ -908,6 +931,7 @@ async fn legacy_database_gets_production_and_shelf_columns() {
     .await;
     assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
     assert_eq!(resp.json()["expiry_date"], "2026-01-08");
+    assert_eq!(resp.json()["shelf_life_unit"], "day");
 }
 
 // ---------------------------------------------------------------------------

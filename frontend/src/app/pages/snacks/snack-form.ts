@@ -1,4 +1,4 @@
-import { SnackInput, SnackLifecycle } from '../../models';
+import { ShelfLifeUnit, SnackInput, SnackLifecycle } from '../../models';
 import { currentLocalDate } from '../../snack-status';
 
 /** 零食编辑弹窗的表单模型（日期字段用字符串，空串表示“未填写”）。 */
@@ -8,12 +8,71 @@ export interface SnackFormModel {
   location: string;
   purchase_date: string;
   production_date: string;
-  shelf_life_days: string;
+  /** 保质期数值，单位见 `shelf_life_unit` */
+  shelf_life_value: string;
+  shelf_life_unit: ShelfLifeUnit;
   expiry_date: string;
   notes: string;
   status: SnackLifecycle;
   opened_at: string;
   finished_at: string;
+}
+
+/** 保质期单位选项；1 个月固定按 30 天、1 年按 365 天换算。 */
+export const SHELF_LIFE_UNITS: ReadonlyArray<{
+  value: ShelfLifeUnit;
+  label: string;
+  days: number;
+}> = [
+  { value: 'day', label: '天', days: 1 },
+  { value: 'month', label: '月', days: 30 },
+  { value: 'year', label: '年', days: 365 },
+];
+
+/** 保质期换算为天数；空值返回 null，非法值（负数 / 小数 / 超上限）也返回 null。 */
+export function shelfLifeDays(value: string, unit: ShelfLifeUnit): number | null {
+  const raw = value.trim();
+  if (!raw) {
+    return null;
+  }
+  const amount = Number(raw);
+  if (!Number.isInteger(amount) || amount < 0) {
+    return null;
+  }
+  const factor = SHELF_LIFE_UNITS.find((item) => item.value === unit)?.days ?? 1;
+  const days = amount * factor;
+  return days <= 36_500 ? days : null;
+}
+
+/** 将已保存的天数还原为“按原单位可整除”的输入值，否则回退为天。 */
+export function shelfFormValue(
+  days: number | null,
+  unit: ShelfLifeUnit,
+): { value: string; unit: ShelfLifeUnit } {
+  if (days === null) {
+    return { value: '', unit };
+  }
+  if (unit === 'month' && days % 30 === 0) {
+    return { value: String(days / 30), unit };
+  }
+  if (unit === 'year' && days % 365 === 0) {
+    return { value: String(days / 365), unit };
+  }
+  return { value: String(days), unit: 'day' };
+}
+
+/** 表格展示：优先按保存时的单位显示整数（如 6 个月），否则回退为天数。 */
+export function shelfLifeLabel(days: number | null, unit: ShelfLifeUnit): string {
+  if (days === null) {
+    return '—';
+  }
+  if (unit === 'month' && days % 30 === 0) {
+    return `${days / 30} 个月`;
+  }
+  if (unit === 'year' && days % 365 === 0) {
+    return `${days / 365} 年`;
+  }
+  return `${days} 天`;
 }
 
 /**
@@ -37,14 +96,15 @@ export function lifecycleTimes(
 }
 
 /** 生产日期 / 保质期 / 过期日期中，用户本次修改的字段。 */
-export type LifecycleDateField = 'production_date' | 'shelf_life_days' | 'expiry_date';
+export type LifecycleDateField = 'production_date' | 'shelf_life' | 'expiry_date';
 
 /**
- * 生产日期、保质期（天）、过期日期：填任意两项自动计算第三项。
+ * 生产日期、保质期、过期日期：填任意两项自动计算第三项。
  *
+ * 保质期按当前单位换算成天数后参与计算（1 月 = 30 天、1 年 = 365 天）。
  * 以用户本次修改的字段为基准，改写另外一项（若第三项原已存在则覆盖），
  * 因此三项始终自洽；日期非法、保质期为负或过期早于生产时返回空对象，
- * 由表单校验给出错误提示。
+ * 由表单校验给出错误提示。由日期反推保质期时统一回退为“天”。
  */
 export function deriveDates(
   form: SnackFormModel,
@@ -52,9 +112,11 @@ export function deriveDates(
 ): Partial<SnackFormModel> {
   const production = form.production_date.trim();
   const expiry = form.expiry_date.trim();
-  const shelfText = form.shelf_life_days.trim();
-  const shelf = shelfText === '' ? null : Number(shelfText);
-  if (shelf !== null && (!Number.isInteger(shelf) || shelf < 0)) {
+  const shelf = shelfLifeDays(form.shelf_life_value, form.shelf_life_unit);
+  const shelfInvalid =
+    form.shelf_life_value.trim() !== '' && shelf === null;
+
+  if (shelfInvalid) {
     return {};
   }
 
@@ -69,13 +131,13 @@ export function deriveDates(
     if (expiry) {
       const days = daysBetween(production, expiry);
       return days !== null && days >= 0
-        ? { shelf_life_days: String(days) }
+        ? { shelf_life_value: String(days), shelf_life_unit: 'day' }
         : {};
     }
     return {};
   }
 
-  if (changed === 'shelf_life_days') {
+  if (changed === 'shelf_life') {
     if (shelf === null) {
       return {};
     }
@@ -97,7 +159,7 @@ export function deriveDates(
   if (production) {
     const days = daysBetween(production, expiry);
     return days !== null && days >= 0
-      ? { shelf_life_days: String(days) }
+      ? { shelf_life_value: String(days), shelf_life_unit: 'day' }
       : {};
   }
   if (shelf !== null) {
@@ -152,8 +214,8 @@ export function formToSnackInput(form: SnackFormModel): SnackInput {
     location: form.location.trim(),
     purchase_date: form.purchase_date || null,
     production_date: form.production_date || null,
-    shelf_life_days:
-      form.shelf_life_days.trim() === '' ? null : Number(form.shelf_life_days),
+    shelf_life_days: shelfLifeDays(form.shelf_life_value, form.shelf_life_unit),
+    shelf_life_unit: form.shelf_life_unit,
     expiry_date: form.expiry_date || null,
     notes: form.notes.trim() || null,
     status: form.status,

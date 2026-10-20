@@ -52,6 +52,7 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             purchase_date TEXT,
             production_date TEXT,
             shelf_life_days INTEGER,
+            shelf_life_unit TEXT NOT NULL DEFAULT 'day',
             expiry_date   TEXT,
             opened_at     TEXT,
             finished_at   TEXT,
@@ -84,6 +85,11 @@ fn ensure_snack_columns(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     if !has("shelf_life_days") {
         conn.execute_batch("ALTER TABLE snacks ADD COLUMN shelf_life_days INTEGER;")?;
+    }
+    if !has("shelf_life_unit") {
+        conn.execute_batch(
+            "ALTER TABLE snacks ADD COLUMN shelf_life_unit TEXT NOT NULL DEFAULT 'day';",
+        )?;
     }
     Ok(())
 }

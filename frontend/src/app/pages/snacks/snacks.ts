@@ -5,7 +5,13 @@ import { forkJoin, of, Subject } from 'rxjs';
 import { catchError, debounceTime, distinctUntilChanged, switchMap } from 'rxjs/operators';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { apiErrorMessage } from '../../api-error';
-import { ExpiryStatusFilter, LifecycleStatusFilter, Snack, SnackInput } from '../../models';
+import {
+  ExpiryStatusFilter,
+  LifecycleStatusFilter,
+  ShelfLifeUnit,
+  Snack,
+  SnackInput,
+} from '../../models';
 import {
   LifecycleBadge,
   SnackBadge,
@@ -21,6 +27,9 @@ import {
   deriveDates,
   formToSnackInput,
   lifecycleTimes,
+  shelfFormValue,
+  shelfLifeDays,
+  shelfLifeLabel,
 } from './snack-form';
 
 const emptyForm = (): SnackFormModel => ({
@@ -29,7 +38,8 @@ const emptyForm = (): SnackFormModel => ({
   location: '',
   purchase_date: '',
   production_date: '',
-  shelf_life_days: '',
+  shelf_life_value: '',
+  shelf_life_unit: 'day',
   expiry_date: '',
   notes: '',
   status: 'in_stock',
@@ -49,6 +59,7 @@ function snackToInput(snack: Snack): SnackInput {
     purchase_date: snack.purchase_date,
     production_date: snack.production_date,
     shelf_life_days: snack.shelf_life_days,
+    shelf_life_unit: snack.shelf_life_unit,
     expiry_date: snack.expiry_date,
     notes: snack.notes,
     status: snack.status,
@@ -79,12 +90,12 @@ export class Snacks {
   protected readonly form = signal<SnackFormModel>(emptyForm());
   protected readonly formError = signal('');
   protected readonly touched = signal<
-    Record<'name' | 'quantity' | 'location' | 'shelf_life_days', boolean>
+    Record<'name' | 'quantity' | 'location' | 'shelf_life_value', boolean>
   >({
     name: false,
     quantity: false,
     location: false,
-    shelf_life_days: false,
+    shelf_life_value: false,
   });
   protected readonly saving = signal(false);
   /** 正在执行快捷动作的零食 id（仅禁用该行按钮，其他行仍可操作）。 */
@@ -189,7 +200,7 @@ export class Snacks {
       name: false,
       quantity: false,
       location: false,
-      shelf_life_days: false,
+      shelf_life_value: false,
     });
     this.notice.set('');
     this.resetLocationSuggestions();
@@ -198,13 +209,15 @@ export class Snacks {
 
   protected openEdit(snack: Snack): void {
     this.editing.set(snack);
+    const shelf = shelfFormValue(snack.shelf_life_days, snack.shelf_life_unit);
     this.form.set({
       name: snack.name,
       quantity: String(snack.quantity),
       location: snack.location,
       purchase_date: snack.purchase_date ?? '',
       production_date: snack.production_date ?? '',
-      shelf_life_days: snack.shelf_life_days === null ? '' : String(snack.shelf_life_days),
+      shelf_life_value: shelf.value,
+      shelf_life_unit: shelf.unit,
       expiry_date: snack.expiry_date ?? '',
       notes: snack.notes ?? '',
       status: snack.status,
@@ -216,7 +229,7 @@ export class Snacks {
       name: false,
       quantity: false,
       location: false,
-      shelf_life_days: false,
+      shelf_life_value: false,
     });
     this.notice.set('');
     this.resetLocationSuggestions();
@@ -306,18 +319,26 @@ export class Snacks {
   }
 
   protected onShelfLifeChange(value: unknown): void {
-    this.onLifecycleDateChange('shelf_life_days', value == null ? '' : String(value));
+    this.onLifecycleDateChange('shelf_life', value == null ? '' : String(value));
+  }
+
+  /** 切换保质期单位：保留数值、按新单位重算第三项。 */
+  protected onShelfLifeUnitChange(unit: ShelfLifeUnit): void {
+    const next = { ...this.form(), shelf_life_unit: unit };
+    this.patch({ shelf_life_unit: unit, ...deriveDates(next, 'shelf_life') });
   }
 
   /** 字段失焦后展示该字段的即时校验提示。 */
   protected markTouched(
-    field: 'name' | 'quantity' | 'location' | 'shelf_life_days',
+    field: 'name' | 'quantity' | 'location' | 'shelf_life_value',
   ): void {
     this.touched.update((value) => ({ ...value, [field]: true }));
   }
 
   /** 即时字段错误；空串表示通过。 */
-  protected fieldError(field: 'name' | 'quantity' | 'location' | 'shelf_life_days'): string {
+  protected fieldError(
+    field: 'name' | 'quantity' | 'location' | 'shelf_life_value',
+  ): string {
     const form = this.form();
     if (field === 'name' && !form.name.trim()) {
       return '请输入零食名称';
@@ -325,14 +346,17 @@ export class Snacks {
     if (field === 'location' && !form.location.trim()) {
       return '请输入存放位置';
     }
-    if (field === 'shelf_life_days') {
-      const raw = form.shelf_life_days.trim();
+    if (field === 'shelf_life_value') {
+      const raw = form.shelf_life_value.trim();
       if (!raw) {
         return '';
       }
-      const days = Number(raw);
-      if (!Number.isInteger(days) || days < 0 || days > 36_500) {
-        return '保质期必须是不小于 0 且不超过 36500 的整数（天）';
+      const amount = Number(raw);
+      if (!Number.isInteger(amount) || amount < 0) {
+        return '保质期必须是不小于 0 的整数';
+      }
+      if (shelfLifeDays(form.shelf_life_value, form.shelf_life_unit) === null) {
+        return '保质期换算后不能超过 36500 天';
       }
     }
     if (field === 'quantity') {
@@ -346,6 +370,11 @@ export class Snacks {
       }
     }
     return '';
+  }
+
+  /** 表格中的保质期展示：按保存单位回显（如 6 个月），否则显示天数。 */
+  protected shelfLifeLabelOf(snack: Snack): string {
+    return shelfLifeLabel(snack.shelf_life_days, snack.shelf_life_unit);
   }
 
   /** 生产日期与过期日期的跨字段校验。 */
@@ -366,10 +395,10 @@ export class Snacks {
       name: true,
       quantity: true,
       location: true,
-      shelf_life_days: true,
+      shelf_life_value: true,
     });
     const invalid = (
-      ['name', 'quantity', 'location', 'shelf_life_days'] as const
+      ['name', 'quantity', 'location', 'shelf_life_value'] as const
     ).find((field) => this.fieldError(field) !== '');
     if (invalid || this.dateRangeError()) {
       return;

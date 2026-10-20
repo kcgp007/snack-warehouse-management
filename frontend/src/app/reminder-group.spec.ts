@@ -10,6 +10,7 @@ function reminder(id: number, level: Reminder['level']): Reminder {
     purchase_date: null,
     production_date: null,
     shelf_life_days: null,
+    shelf_life_unit: 'day',
     expiry_date: '2026-01-01',
     notes: null,
     status: 'in_stock',
