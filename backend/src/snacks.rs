@@ -144,6 +144,30 @@ fn validate(raw: SnackInputRaw) -> Result<SnackInput, ApiError> {
         finished_at = Some(today_string());
     }
 
+    // 日期前后逻辑校验（契约 §3）：打开日期不能晚于吃完日期。
+    if let (Some(opened), Some(finished)) = (&opened_at, &finished_at) {
+        if opened > finished {
+            return Err(ApiError::bad_request("打开日期不能晚于吃完日期"));
+        }
+    }
+
+    // 状态与日期的一致性校验（契约 §3：状态由打开/吃完日期推断，手动 status 与日期必须一致）
+    let has_opened = opened_at.is_some();
+    let has_finished = finished_at.is_some();
+    let expected_status = match (has_opened, has_finished) {
+        (false, false) => "in_stock",
+        (true, false) => "opened",
+        _ => "finished",
+    };
+    if status != expected_status {
+        return Err(ApiError::bad_request(format!(
+            "状态与日期不一致：状态为{}，但打开日期{}、吃完日期{}",
+            status,
+            if has_opened { "已填写" } else { "未填写" },
+            if has_finished { "已填写" } else { "未填写" },
+        )));
+    }
+
     Ok(SnackInput {
         name,
         quantity,

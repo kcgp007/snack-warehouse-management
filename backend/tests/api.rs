@@ -1274,6 +1274,7 @@ async fn reminders_level_order_and_finished_exclusion() {
     .await;
     let mut soon = snack("两天", "厨房/冰箱", Some(&local_date(2)));
     soon["status"] = json!("opened");
+    soon["opened_at"] = json!(local_date(0));
     create_snack(&app, &token, soon).await;
     create_snack(
         &app,
@@ -1297,6 +1298,7 @@ async fn reminders_level_order_and_finished_exclusion() {
     create_snack(&app, &token, snack("无日期", "阳台/储物箱", None)).await;
     let mut done = snack("已吃完", "厨房/冰箱", Some(&local_date(1)));
     done["status"] = json!("finished");
+    done["finished_at"] = json!(local_date(1));
     create_snack(&app, &token, done).await;
 
     let resp = send(&app, "GET", "/api/reminders", Some(&token), None).await;
