@@ -27,6 +27,7 @@ import {
   changeDateField,
   deriveDates,
   formToSnackInput,
+  lifecycleError,
   lifecycleTimes,
   shelfFormValue,
   shelfLifeDays,
@@ -91,12 +92,23 @@ export class Snacks {
   protected readonly form = signal<SnackFormModel>(emptyForm());
   protected readonly formError = signal('');
   protected readonly touched = signal<
-    Record<'name' | 'quantity' | 'location' | 'shelf_life_value', boolean>
+    Record<
+      |
+      | 'name'
+      | 'quantity'
+      | 'location'
+      | 'shelf_life_value'
+      | 'opened_at'
+      | 'finished_at'
+      , boolean
+    >
   >({
     name: false,
     quantity: false,
     location: false,
     shelf_life_value: false,
+    opened_at: false,
+    finished_at: false,
   });
   protected readonly saving = signal(false);
   /** 正在执行快捷动作的零食 id（仅禁用该行按钮，其他行仍可操作）。 */
@@ -202,6 +214,8 @@ export class Snacks {
       quantity: false,
       location: false,
       shelf_life_value: false,
+      opened_at: false,
+      finished_at: false,
     });
     this.notice.set('');
     this.resetLocationSuggestions();
@@ -221,7 +235,6 @@ export class Snacks {
       shelf_life_unit: shelf.unit,
       expiry_date: snack.expiry_date ?? '',
       notes: snack.notes ?? '',
-      status: snack.status,
       opened_at: snack.opened_at ?? '',
       finished_at: snack.finished_at ?? '',
     });
@@ -231,6 +244,8 @@ export class Snacks {
       quantity: false,
       location: false,
       shelf_life_value: false,
+      opened_at: false,
+      finished_at: false,
     });
     this.notice.set('');
     this.resetLocationSuggestions();
@@ -330,14 +345,26 @@ export class Snacks {
 
   /** 字段失焦后展示该字段的即时校验提示。 */
   protected markTouched(
-    field: 'name' | 'quantity' | 'location' | 'shelf_life_value',
+    field:
+      | 'name'
+      | 'quantity'
+      | 'location'
+      | 'shelf_life_value'
+      | 'opened_at'
+      | 'finished_at',
   ): void {
     this.touched.update((value) => ({ ...value, [field]: true }));
   }
 
   /** 即时字段错误；空串表示通过。 */
   protected fieldError(
-    field: 'name' | 'quantity' | 'location' | 'shelf_life_value',
+    field:
+      | 'name'
+      | 'quantity'
+      | 'location'
+      | 'shelf_life_value'
+      | 'opened_at'
+      | 'finished_at',
   ): string {
     const form = this.form();
     if (field === 'name' && !form.name.trim()) {
@@ -369,6 +396,9 @@ export class Snacks {
         return '数量必须是不小于 0 的整数';
       }
     }
+    if (field === 'opened_at' || field === 'finished_at') {
+      return lifecycleError(form.opened_at, form.finished_at);
+    }
     return '';
   }
 
@@ -388,6 +418,11 @@ export class Snacks {
     return expiry < production ? '过期日期不能早于生产日期' : '';
   }
 
+  /** 打开/吃完日期的前后逻辑错误（统一展示，避免与字段级错误重复）。 */
+  protected lifecycleStatusError(): string {
+    return lifecycleError(this.form().opened_at, this.form().finished_at);
+  }
+
   protected save(): void {
     const form = this.form();
     this.formError.set('');
@@ -396,14 +431,23 @@ export class Snacks {
       quantity: true,
       location: true,
       shelf_life_value: true,
+      opened_at: true,
+      finished_at: true,
     });
     const invalid = (
-      ['name', 'quantity', 'location', 'shelf_life_value'] as const
+      [
+        'name',
+        'quantity',
+        'location',
+        'shelf_life_value',
+        'opened_at',
+        'finished_at',
+      ] as const
     ).find((field) => this.fieldError(field) !== '');
     if (invalid || this.dateRangeError()) {
       return;
     }
-    // 状态/日期一致性归一化（契约 §3）：finished 才带 finished_at（留空则填当前日期），
+    // 状态由打开/吃完日期自动推断（契约 §3）：finished 才带 finished_at（留空则填当前日期），
     // in_stock 不带 opened_at/finished_at —— 例如“已吃完→未打开”保存后不再残留矛盾日期。
     const input: SnackInput = formToSnackInput(form);
     const editing = this.editing();
@@ -429,15 +473,24 @@ export class Snacks {
   protected markOpened(snack: Snack): void {
     this.quickPut(
       snack,
-      { ...snackToInput(snack), status: 'opened', opened_at: currentLocalDate() },
+      {
+        ...snackToInput(snack),
+        opened_at: currentLocalDate(),
+        finished_at: null,
+      },
       `「${snack.name}」已标记打开`,
     );
   }
 
   protected markFinished(snack: Snack): void {
+    const opened = snack.opened_at || currentLocalDate();
     this.quickPut(
       snack,
-      { ...snackToInput(snack), status: 'finished', finished_at: currentLocalDate() },
+      {
+        ...snackToInput(snack),
+        opened_at: opened,
+        finished_at: currentLocalDate(),
+      },
       `「${snack.name}」已标记吃完`,
     );
   }

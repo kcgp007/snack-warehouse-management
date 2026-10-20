@@ -76,23 +76,69 @@ export function shelfLifeLabel(days: number | null, unit: ShelfLifeUnit): string
 }
 
 /**
+ * 根据打开/吃完日期推断生命周期状态（不再手动选择）：
+ * - 有吃完日期 → finished；
+ * - 有打开日期但无吃完日期 → opened；
+ * - 两者都空 → in_stock。
+ */
+export function inferLifecycleStatus(
+  openedAt: string | null,
+  finishedAt: string | null,
+): SnackLifecycle {
+  const opened = openedAt ? openedAt.trim() : '';
+  const finished = finishedAt ? finishedAt.trim() : '';
+  if (finished) {
+    return 'finished';
+  }
+  if (opened) {
+    return 'opened';
+  }
+  return 'in_stock';
+}
+
+/**
  * 生命周期状态与打开/吃完日期的一致性规则（契约 §3：UI 不应展示矛盾数据）：
+ * 根据日期推断状态，并归一化日期：
  * - `in_stock`（未打开）：打开日期与吃完日期都必须为空；
  * - `opened`（已打开）：保留打开日期，吃完日期必须为空；
  * - `finished`（已吃完）：保留打开日期，吃完日期必填（留空则填当前日期）。
  */
 export function lifecycleTimes(
-  status: SnackLifecycle,
   openedAt: string | null,
   finishedAt: string | null,
-): { opened_at: string | null; finished_at: string | null } {
+): { status: SnackLifecycle; opened_at: string | null; finished_at: string | null } {
+  const status = inferLifecycleStatus(openedAt, finishedAt);
+  let normalizedOpened: string | null = null;
+  let normalizedFinished: string | null = null;
+
   if (status === 'finished') {
-    return { opened_at: openedAt || null, finished_at: finishedAt || currentLocalDate() };
+    normalizedOpened = openedAt || null;
+    normalizedFinished = finishedAt || currentLocalDate();
+  } else if (status === 'opened') {
+    normalizedOpened = openedAt || null;
+    normalizedFinished = null;
   }
-  if (status === 'opened') {
-    return { opened_at: openedAt || null, finished_at: null };
+  return { status, opened_at: normalizedOpened, finished_at: normalizedFinished };
+}
+
+/**
+ * 打开/吃完日期的前后逻辑校验：
+ * - 吃完日期非空时，打开日期必须非空（先打开才能吃完）；
+ * - 打开日期不能晚于吃完日期。
+ */
+export function lifecycleError(
+  openedAt: string | null,
+  finishedAt: string | null,
+): string {
+  const opened = openedAt ? openedAt.trim() : '';
+  const finished = finishedAt ? finishedAt.trim() : '';
+  if (finished && !opened) {
+    return '吃完日期不能早于打开日期：请先填写打开日期';
   }
-  return { opened_at: null, finished_at: null };
+  if (opened && finished && opened > finished) {
+    return '打开日期不能晚于吃完日期';
+  }
+  return '';
 }
 
 /** 生产日期 / 保质期 / 过期日期中，用户本次修改的字段。 */
@@ -234,7 +280,6 @@ export function formToSnackInput(form: SnackFormModel): SnackInput {
     shelf_life_unit: form.shelf_life_unit,
     expiry_date: form.expiry_date || null,
     notes: form.notes.trim() || null,
-    status: form.status,
-    ...lifecycleTimes(form.status, form.opened_at, form.finished_at),
+    ...lifecycleTimes(form.opened_at, form.finished_at),
   };
 }

@@ -311,21 +311,36 @@
             <input
               name="opened_at"
               type="date"
+              [class.invalid]="touched().opened_at && fieldError('opened_at')"
+              [attr.aria-invalid]="touched().opened_at && fieldError('opened_at') ? 'true' : null"
               [ngModel]="form().opened_at"
               (ngModelChange)="patch({ opened_at: $event })"
+              (blur)="markTouched('opened_at')"
             />
+            @if (touched().opened_at && fieldError('opened_at')) {
+              <p class="field-error" role="alert">{{ fieldError('opened_at') }}</p>
+            }
           </label>
           <label class="field">
             <span>吃完日期（选填）</span>
             <input
               name="finished_at"
               type="date"
+              [class.invalid]="touched().finished_at && fieldError('finished_at')"
+              [attr.aria-invalid]="touched().finished_at && fieldError('finished_at') ? 'true' : null"
               [ngModel]="form().finished_at"
               (ngModelChange)="patch({ finished_at: $event })"
+              (blur)="markTouched('finished_at')"
             />
+            @if (touched().finished_at && fieldError('finished_at')) {
+              <p class="field-error" role="alert">{{ fieldError('finished_at') }}</p>
+            }
           </label>
         </div>
-        <p class="form-hint">状态选“已吃完”且吃完日期留空时，将自动填入当前日期。</p>
+        @if (lifecycleStatusError()) {
+          <p class="field-error" role="alert">{{ lifecycleStatusError() }}</p>
+        }
+        <p class="form-hint">状态由打开/吃完日期自动判断：只有吃完日期时为“已吃完”，只有打开日期时为“已打开”，两者都为空时为“未打开”。</p>
         <label class="field">
           <span>备注</span>
           <textarea
