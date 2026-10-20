@@ -528,6 +528,13 @@ export class Snacks {
     return lifecycleBadge(snack.status);
   }
 
+  /** 表单中的状态仅用于展示：由当前打开/吃完日期实时推断，不允许手动选择。 */
+  protected formStatusBadge(): LifecycleBadge {
+    return lifecycleBadge(
+      inferLifecycleStatus(this.form().opened_at || null, this.form().finished_at || null),
+    );
+  }
+
   /** 按生命周期状态屏蔽矛盾日期：未打开不显示任何日期，吃完日期仅在已吃完时显示。 */
   protected dateCellOf(snack: Snack, kind: 'opened' | 'finished'): string {
     const value = kind === 'finished' ? snack.finished_at : snack.opened_at;

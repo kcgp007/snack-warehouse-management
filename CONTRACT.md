@@ -5,6 +5,8 @@
 > 2. `GET /api/locations` 新增查询参数 **`q`**，用于存放位置输入框“按已输入字符回显已有位置、可快选”的自动补全；
 > 3. 前端整体美化（视觉/交互一致性为验收项）。
 > v2 未提及的条目沿用 v1。
+>
+> **v3 增量**：新增 `production_date` / `shelf_life_days` / `shelf_life_unit`（生产日期、保质期天/月/年）；生命周期状态由打开/吃完日期**自动推断**（前端不再提供手动状态选择）；列表排序规则调整（见 §3）。
 
 ## 0. 总体架构（不可更改的约束）
 
@@ -79,7 +81,7 @@
 | expiry_date | TEXT | 过期日期 `YYYY-MM-DD`，可空 |
 | opened_at | TEXT | 打开日期 `YYYY-MM-DD`（服务器本地日期，**纯日期，无时间部分**），**非必填**，可空 |
 | finished_at | TEXT | 吃完日期 `YYYY-MM-DD`（纯日期），可空 |
-| status | TEXT NOT NULL DEFAULT 'in_stock' | 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完） |
+| status | TEXT NOT NULL DEFAULT 'in_stock' | 生命周期状态：`in_stock`（未打开）/ `opened`（已打开）/ `finished`（已吃完）；**由 `opened_at`/`finished_at` 推断**（v3），不接受 UI 手动选择 |
 | notes | TEXT | 备注，可空 |
 | created_at | TEXT NOT NULL | RFC3339 UTC |
 | updated_at | TEXT NOT NULL | RFC3339 UTC |
@@ -89,6 +91,8 @@
 **存量数据迁移（v3，幂等）**：旧库启动时通过 `PRAGMA table_info` 检测并 `ALTER TABLE` 补齐 `production_date` / `shelf_life_days` / `shelf_life_unit` 列；已有记录前两列为 NULL，单位为 `day`。
 
 **生产日期 / 保质期 / 过期日期联动**：三项均可空；**填任意两项时服务端自动计算第三项**（生产日期 + 保质期 → 过期日期；生产日期 + 过期日期 → 保质期天数；保质期 + 过期日期 → 生产日期）。三项都填且互不自洽 → 400 `{"error":"生产日期、保质期与过期日期不一致"}`；过期日期早于生产日期 → 400 `{"error":"过期日期不能早于生产日期"}`；保质期不在 `0..=36500` → 400。前端以用户最后修改的字段为准覆盖另一项，保证界面上三项始终自洽。保质期支持 `天 / 月 / 年` 单位选择，写入 API 时统一换算为 `shelf_life_days`（1 月 = 30 天、1 年 = 365 天），同时保存 `shelf_life_unit` 供界面按原单位回显；由日期反推保质期时回退为 `day`。
+
+**生命周期状态推断与日期校验（v3）**：状态完全由日期决定——`opened_at`、`finished_at` 都为空 → `in_stock`；仅 `opened_at` 非空 → `opened`；`finished_at` 非空 → `finished`（即便没有打开日期）。服务端写入时校验：显式传入的 `status` 与日期推断结果不一致 → 400 `{"error":"状态与日期不一致：..."}`；`opened_at > finished_at` → 400 `{"error":"打开日期不能晚于吃完日期"}`。前端表单只展示只读状态徽章，不提供状态下拉，提交时由日期推断并省略手动状态。
 
 ## 2. 认证方式
 
@@ -110,7 +114,7 @@
 ### 零食
 | 方法/路径 | 说明 |
 |---|---|
-| `GET /api/snacks` | 查询参数：`q`（name/notes 模糊）、`location`（精确匹配）、`expiry_status`=`all\|ok\|expiring\|expired`（默认 `all`，**过期维度**）、`status`=`all\|in_stock\|opened\|finished`（默认 `all`，**生命周期维度**）。响应：Snack 数组（**裸数组，非包装对象**） |
+| `GET /api/snacks` | 查询参数：`q`（name/notes 模糊）、`location`（精确匹配）、`expiry_status`=`all\|ok\|expiring\|expired`（默认 `all`，**过期维度**）、`status`=`all\|in_stock\|opened\|finished`（默认 `all`，**生命周期维度**）。响应：Snack 数组（**裸数组，非包装对象**），默认按 `created_at DESC, id DESC` 排序（最新创建在前） |
 | `POST /api/snacks` | 请求体见 SnackInput；201 返回 Snack |
 | `PUT /api/snacks/{id}` | 请求体见 SnackInput；200 返回 Snack；不存在 404 |
 | `DELETE /api/snacks/{id}` | `204`；不存在 404 |
@@ -122,14 +126,14 @@
   "purchase_date": "2026-01-05", "production_date": null,
   "shelf_life_days": null, "shelf_life_unit": "day",
   "expiry_date": null, "notes": null,
-  // 以下为新增字段，均可省略；省略时 status 默认 'in_stock'，两个日期为 null
-  "status": "in_stock",          // 可选值 in_stock|opened|finished，非法值 400
+  // 以下字段均可省略；前端不发送 status（由日期推断），外部调用如发送则必须与日期一致
+  "status": null,                // 可选 in_stock|opened|finished，非法或与日期不一致 → 400
   "opened_at": null,              // 打开日期 YYYY-MM-DD，非必填
   "finished_at": null }           // 吃完日期 YYYY-MM-DD
 // Snack = SnackInput + { "id": 1, "created_at": "...", "updated_at": "..." }
 ```
 校验失败（缺字段、quantity<0、`purchase_date`/`production_date`/`expiry_date`/`opened_at`/`finished_at` 任一格式非 `YYYY-MM-DD`（v2 起**不再接受** `YYYY-MM-DDTHH:MM`，传入即 400）、`shelf_life_days` 非整数或越界、`shelf_life_unit` 非 `day/month/year`、三项日期互不自洽、status 非法）→ 400 `{"error":...}`。
-服务端规则：`status="finished"` 且请求未带 `finished_at` 时，服务端自动填充**当前本地日期 `YYYY-MM-DD`**；`finished_at` 仅在 `status="finished"` 时有意义（其他状态下携带可保存但不强制清除，前后端 UI 不应展示矛盾数据）。
+服务端规则：`status` 由日期推断并校验一致性——两者皆空 → `in_stock`，仅 `opened_at` 非空 → `opened`，`finished_at` 非空 → `finished`；显式传入的 `status` 与日期推断结果不一致 → 400。为兼容旧客户端，`status="finished"` 且未带 `finished_at` 时仍自动填充**当前本地日期 `YYYY-MM-DD`**；`opened_at > finished_at` → 400 `{"error":"打开日期不能晚于吃完日期"}`。
 
 ### 过期提醒
 `GET /api/reminders` → 数组，元素为 Snack 字段（**含新字段 status/opened_at/finished_at**）再加：
@@ -144,7 +148,7 @@
 ### 账户管理（仅 is_admin=1 可访问，非管理员 403）
 | 方法/路径 | 请求体 | 响应 |
 |---|---|---|
-| `GET /api/users` | — | `[{"id","username","is_admin": bool,"created_at"}]` 数组 |
+| `GET /api/users` | — | `[{"id","username","is_admin": bool,"created_at"}]` 数组，按 `username ASC` 排序 |
 | `POST /api/users` | `{"username","password"}` | 201 返回同上单个对象；创建的账户 `is_admin=false`（**不提供角色管理功能**）；用户名重复 409 |
 | `DELETE /api/users/{id}` | — | `204`；删除自己 → 400 `{"error":"不能删除当前登录账户"}`；不存在 404 |
 
@@ -156,9 +160,9 @@
    - 过期状态徽章（基于 expiry_date）：已过期=红、≤7天=橙、正常=绿、无过期日期=灰。
    - 生命周期状态徽章（status）：`in_stock`=蓝(未打开)、`opened`=紫(已打开)、`finished`=灰(已吃完)。
    - 顶部筛选：搜索框、存放位置下拉（来自 `/api/locations`）、过期状态筛选（请求参数 `expiry_status`）、生命周期状态筛选（请求参数 `status`)、"+ 添加零食"按钮（弹窗或表单页均可）。
-   - 编辑/添加表单字段含：生产日期、保质期（数值 + `天/月/年` 单位）、过期日期（三者填任意两项自动计算第三项，并即时提示日期矛盾）、状态下拉、打开日期（**`type="date"` 输入，选填**）、吃完日期（`type="date"`，选填；状态选"已吃完"且吃完日期留空时由后端自动填充）。
+   - 编辑/添加表单字段含：生产日期、保质期（数值 + `天/月/年` 单位）、过期日期（三者填任意两项自动计算第三项，并即时提示日期矛盾）、**生命周期状态（只读徽章，按打开/吃完日期自动推断，不提供状态下拉）**、打开日期（**`type="date"` 输入，选填**）、吃完日期（`type="date"`，选填；填写后状态自动变为已吃完）。
    - **存放位置输入框自动补全（v2 必做）**：输入过程中按**已输入字符**调用 `GET /api/locations?q=<已输入文本>`，在输入框下方回显匹配的已有位置列表（防抖即可，非强制），**点击可快选填入**；同时必须仍允许输入全新位置自由保存（自动补全只是回显建议，不做强制约束）。筛选栏的存放位置下拉沿用 `GET /api/locations`（无 `q`）。
-   - 建议在操作列提供快捷动作："标记打开"（status→opened，opened_at 取当前日期）与"标记吃完"（status→finished，finished_at 取当前日期），即一次 PUT 请求完成。
+   - 建议在操作列提供快捷动作："标记打开"（写入 `opened_at` 为当前日期，状态自动推断为 `opened`）与"标记吃完"（写入 `finished_at` 为当前日期，状态自动推断为 `finished`），即一次 PUT 请求完成。
    - **整体美化（v2 验收项）**：统一配色/字号/间距/圆角/阴影，徽章与按钮风格一致，表格行悬停与斑马纹，空状态与加载态提示，表单校验错误即时可见，桌面与窄屏（移动）布局均不破版；中文界面文案统一。
 3. **/reminders 过期提醒**（需登录）：按 status 分组/标色展示，显示剩余天数。
 4. **/users 账户管理**（需 admin guard，菜单项对非 admin 隐藏）：用户列表、添加账户、删除账户（含"不能删除自己"的错误展示）。
@@ -173,6 +177,6 @@
 
 ## 5. 各 lane 验证要求（必须在报告中附命令与输出摘要）
 
-- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**、**v3：生产日期/保质期/过期日期任意两项自动推导第三项、保质期单位保存与非法单位 400、三项矛盾与过期早于生产 → 400、旧库自动补列且幂等**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
+- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**、**v3：生产日期/保质期/过期日期任意两项自动推导第三项、保质期单位保存与非法单位 400、三项矛盾与过期早于生产 → 400、旧库自动补列且幂等、状态与日期不一致 → 400、打开日期晚于吃完日期 → 400、snacks 按 created_at 倒序、users 按用户名升序**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
 - 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误；**`npm test`（vitest）全绿**。
 - 集成：`./build.sh` 一键编译成功；`./run.sh` 一键运行后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback→Ctrl-C 干净退出（进程无残留）。

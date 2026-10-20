@@ -292,18 +292,15 @@
               (ngModelChange)="patch({ purchase_date: $event })"
             />
           </label>
-          <label class="field">
-            <span>状态</span>
-            <select
-              name="status"
-              [ngModel]="form().status"
-              (ngModelChange)="patch({ status: $event })"
-            >
-              <option value="in_stock">未打开</option>
-              <option value="opened">已打开</option>
-              <option value="finished">已吃完</option>
-            </select>
-          </label>
+          <div class="field">
+            <span>状态（自动判断）</span>
+            <p class="auto-status">
+              <span class="lifecycle" [attr.data-lifecycle]="formStatusBadge().cls">{{
+                formStatusBadge().label
+              }}</span>
+              <span class="hint">由打开/吃完日期自动推断</span>
+            </p>
+          </div>
         </div>
         <div class="field-row">
           <label class="field">
