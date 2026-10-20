@@ -81,7 +81,9 @@ cd dist
 
 ### HTTPS 与证书
 
-服务只以 HTTPS 启动。首次启动时若 `data/certs/server.crt` 与 `data/certs/server.key` 都不存在，会自动生成一对自签名证书（私钥权限 `0600`），路径相对当前运行目录，即：
+服务只以 HTTPS 提供内容，并且**同一端口会自动识别明文 HTTP**：用 `http://` 访问时返回 `308 Permanent Redirect` 跳转到对应的 `https://` 地址（路径与查询参数保留），HTTPS 响应同时带 `Strict-Transport-Security`，后续浏览器会自动使用 HTTPS。
+
+首次启动时若 `data/certs/server.crt` 与 `data/certs/server.key` 都不存在，会自动生成一对自签名证书（私钥权限 `0600`），路径相对当前运行目录，即：
 
 ```text
 <运行目录>/data/certs/server.crt

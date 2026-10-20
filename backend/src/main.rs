@@ -11,8 +11,8 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
 
+use axum::middleware;
 use snack_warehouse_backend::{build_app, tls, AppConfig};
 
 fn env_path(key: &str, default: PathBuf) -> PathBuf {
@@ -40,7 +40,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_app(AppConfig {
         db_path: db_path.clone(),
         static_dir: static_dir.clone(),
-    })?;
+    })?
+    .layer(middleware::from_fn_with_state(
+        tls::HttpsPort(port),
+        tls::redirect_plain_http,
+    ));
 
     let addr = socket_addr(&host, port)?;
     let tls = tls::load_or_generate().await?;
@@ -53,19 +57,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tls.cert_path.display(),
         tls.key_path.display()
     );
+    eprintln!("[server] 同端口自动识别 HTTP 请求并跳转到 HTTPS");
 
-    let handle = axum_server::Handle::new();
-    let shutdown_handle = handle.clone();
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        eprintln!("[server] shutting down");
-        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-    });
-
-    axum_server::bind_rustls(addr, tls.config)
-        .handle(handle)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tls::HybridListener::new(listener, tls.config);
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<tls::HybridAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -79,10 +80,12 @@ async fn shutdown_signal() {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = term.recv() => {}
             }
+            eprintln!("[server] shutting down");
             return;
         }
     }
     let _ = tokio::signal::ctrl_c().await;
+    eprintln!("[server] shutting down");
 }
 
 /// 把 `HOST`/`PORT` 解析为监听地址；裸 IPv6 需要补方括号。
