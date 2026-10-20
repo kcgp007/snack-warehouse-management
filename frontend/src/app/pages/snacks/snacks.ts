@@ -27,6 +27,7 @@ import {
   changeDateField,
   deriveDates,
   formToSnackInput,
+  inferLifecycleStatus,
   lifecycleError,
   lifecycleTimes,
   shelfFormValue,
@@ -64,8 +65,7 @@ function snackToInput(snack: Snack): SnackInput {
     shelf_life_unit: snack.shelf_life_unit,
     expiry_date: snack.expiry_date,
     notes: snack.notes,
-    status: snack.status,
-    ...lifecycleTimes(snack.status, snack.opened_at, snack.finished_at),
+    ...lifecycleTimes(snack.opened_at, snack.finished_at),
   };
 }
 
@@ -91,18 +91,14 @@ export class Snacks {
   protected readonly editing = signal<Snack | null>(null);
   protected readonly form = signal<SnackFormModel>(emptyForm());
   protected readonly formError = signal('');
-  protected readonly touched = signal<
-    Record<
-      |
-      | 'name'
-      | 'quantity'
-      | 'location'
-      | 'shelf_life_value'
-      | 'opened_at'
-      | 'finished_at'
-      , boolean
-    >
-  >({
+  protected readonly touched = signal<{
+    name: boolean;
+    quantity: boolean;
+    location: boolean;
+    shelf_life_value: boolean;
+    opened_at: boolean;
+    finished_at: boolean;
+  }>({
     name: false,
     quantity: false,
     location: false,
@@ -237,6 +233,7 @@ export class Snacks {
       notes: snack.notes ?? '',
       opened_at: snack.opened_at ?? '',
       finished_at: snack.finished_at ?? '',
+      status: inferLifecycleStatus(snack.opened_at ?? null, snack.finished_at ?? null),
     });
     this.formError.set('');
     this.touched.set({
