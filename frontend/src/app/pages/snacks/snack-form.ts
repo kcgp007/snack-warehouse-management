@@ -169,6 +169,22 @@ export function deriveDates(
   return {};
 }
 
+/**
+ * 处理单个联动字段的输入：把值写入表单，并合并自动推导出的另外两项。
+ *
+ * 注意保质期在表单中的实际字段名是 `shelf_life_value`，而联动字段标识是
+ * `shelf_life`，二者必须显式映射（否则会写入一个不存在的属性）。
+ */
+export function changeDateField(
+  form: SnackFormModel,
+  field: LifecycleDateField,
+  value: string,
+): Partial<SnackFormModel> {
+  const key = field === 'shelf_life' ? 'shelf_life_value' : field;
+  const next = { ...form, [key]: value };
+  return { [key]: value, ...deriveDates(next, field) };
+}
+
 /** 解析 YYYY-MM-DD 为 UTC 毫秒；非法日期（如 2026-02-30）返回 null。 */
 function parseDate(value: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {

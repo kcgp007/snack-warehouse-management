@@ -1,6 +1,7 @@
 import {
   SnackFormModel,
   addDays,
+  changeDateField,
   daysBetween,
   deriveDates,
   formToSnackInput,
@@ -177,6 +178,23 @@ describe('shelfLifeDays / shelfLifeLabel', () => {
     expect(shelfLifeLabel(45, 'month')).toBe('45 天');
     expect(shelfLifeLabel(45, 'day')).toBe('45 天');
     expect(shelfLifeLabel(null, 'day')).toBe('—');
+  });
+});
+
+describe('changeDateField（表单字段写回）', () => {
+  it('把 shelf_life 输入写入 shelf_life_value 并同步推导过期日期', () => {
+    const form = baseForm({ production_date: '2026-01-01', shelf_life_value: '6' });
+    expect(changeDateField(form, 'shelf_life', '6')).toEqual({
+      shelf_life_value: '6',
+      expiry_date: '2026-01-07',
+    });
+  });
+
+  it('生产日期与保质期两项填写后得到过期日期（回归：字段名映射）', () => {
+    const form = baseForm({ production_date: '2026-01-01' });
+    const withShelf = { ...form, ...changeDateField(form, 'shelf_life', '30') };
+    expect(withShelf.shelf_life_value).toBe('30');
+    expect(withShelf.expiry_date).toBe('2026-01-31');
   });
 });
 

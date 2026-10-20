@@ -24,6 +24,7 @@ import { SnackService } from '../../services/snack.service';
 import {
   LifecycleDateField,
   SnackFormModel,
+  changeDateField,
   deriveDates,
   formToSnackInput,
   lifecycleTimes,
@@ -314,8 +315,7 @@ export class Snacks {
    * 填满任意两项后自动计算第三项（见 `deriveDates`）。
    */
   protected onLifecycleDateChange(field: LifecycleDateField, value: string): void {
-    const next = { ...this.form(), [field]: value };
-    this.patch({ [field]: value, ...deriveDates(next, field) });
+    this.patch(changeDateField(this.form(), field, value));
   }
 
   protected onShelfLifeChange(value: unknown): void {
