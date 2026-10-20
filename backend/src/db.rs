@@ -354,11 +354,9 @@ mod tests {
         migrate(&conn).unwrap();
         init_admin(&conn, "admin", DEFAULT_ADMIN_PASSWORD).unwrap();
         let user_id: i64 = conn
-            .query_row(
-                "SELECT id FROM users WHERE username = 'admin'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM users WHERE username = 'admin'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let past = (chrono::Utc::now() - chrono::TimeDelta::days(1)).to_rfc3339();
         let future = (chrono::Utc::now() + chrono::TimeDelta::days(1)).to_rfc3339();
@@ -377,9 +375,7 @@ mod tests {
             let mut stmt = conn
                 .prepare("SELECT token FROM sessions ORDER BY token")
                 .unwrap();
-            let mapped = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .unwrap();
+            let mapped = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
             mapped.collect::<rusqlite::Result<Vec<_>>>().unwrap()
         };
         assert_eq!(tokens, vec!["fresh".to_owned()]);

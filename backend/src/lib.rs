@@ -10,6 +10,7 @@ mod error;
 mod reminders;
 mod snacks;
 mod static_files;
+pub mod tls;
 mod users;
 mod util;
 

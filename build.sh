@@ -33,24 +33,23 @@ echo "[build] 静态资源已就绪：$DIST_DIR/static (来源 $BROWSER_DIR)"
 
 cat > "$DIST_DIR/run.sh" <<'RUN_EOF'
 #!/usr/bin/env bash
-# 一键运行：必要时先自动编译（./build.sh），再以前台进程启动后端。
+# 一键运行：以前台进程启动后端（需先执行 build.sh 生成 dist/）。
 # Ctrl-C / SIGINT / SIGTERM 会转发给后端子进程并等待其退出，不留残留进程。
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 自动定位编译产物：优先当前目录（dist/ 就地运行），回退到仓库布局
-# 路径由脚本自动推导，不依赖 STATIC_DIR / SNACK_DB_PATH 等环境变量
-if [ -x "$ROOT_DIR/snack-warehouse-backend" ]; then
-  BACKEND_BIN="$ROOT_DIR/snack-warehouse-backend"
-  STATIC_DIR="$ROOT_DIR/static"
-else
-  BACKEND_BIN="$ROOT_DIR/backend/target/debug/snack-warehouse-backend"
-  STATIC_DIR="$ROOT_DIR/backend/static"
-fi
+# 产物与脚本同目录（build.sh 生成的 dist/ 布局）；路径自动推导，不依赖环境变量
+BACKEND_BIN="$ROOT_DIR/snack-warehouse-backend"
+STATIC_DIR="$ROOT_DIR/static"
 STATIC_INDEX="$STATIC_DIR/index.html"
 
-# 信号转发：把 INT/TERM 转给子进程所在的整个进程组（先于任何子步骤安装，
-# 避免自动编译期间收到信号留下孤儿 build.sh/npm）
+if [ ! -x "$BACKEND_BIN" ] || [ ! -f "$STATIC_INDEX" ]; then
+  echo "[run] 缺少编译产物（$BACKEND_BIN / $STATIC_INDEX）" >&2
+  echo "[run] 请在仓库根目录执行 ./build.sh 重新生成 dist/ 后再运行" >&2
+  exit 1
+fi
+
+# 信号转发：把 INT/TERM 转给后端子进程
 set -m  # 后台作业独立进程组，可整组转发/终止
 child=""
 forward() {
@@ -61,31 +60,17 @@ forward() {
 trap 'forward INT' INT
 trap 'forward TERM' TERM
 
-# 1) 产物缺失（静态资源或后端二进制）→ 先自动编译（后台子进程，纳入信号转发）
-if [ ! -f "$STATIC_INDEX" ] || [ ! -x "$BACKEND_BIN" ]; then
-  echo "[run] 未检测到编译产物（$STATIC_INDEX / $BACKEND_BIN），先执行 ./build.sh …"
-  "$ROOT_DIR/build.sh" &
-  child=$!
-  set +e
-  wait "$child"
-  build_status=$?
-  set -e
-  child=""
-  if [ "$build_status" -ne 0 ]; then
-    echo "[run] 自动编译未成功（退出码 $build_status），不启动后端"
-    exit "$build_status"
-  fi
-fi
-
 # 配置项可用环境变量覆盖（非路径）：PORT/HOST/ADMIN_USERNAME/ADMIN_PASSWORD
-# 核心路径（STATIC_DIR / SNACK_DB_PATH）由脚本自动推导，不读环境变量
+# 核心路径由脚本自动推导，不读环境变量
 PORT="${PORT:-3000}"
 HOST="${HOST:-0.0.0.0}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 export PORT HOST ADMIN_USERNAME ADMIN_PASSWORD
+# 核心路径只由脚本推导，避免外部环境变量把数据/静态目录指到别处
+unset SNACK_DB_PATH
 
-# 相对路径（如默认 data/app.db）统一相对仓库根目录解析
+# 相对路径统一相对运行目录解析
 cd "$ROOT_DIR"
 
 DB_PATH="$ROOT_DIR/data/app.db"
@@ -103,14 +88,14 @@ if [ "$HOST" = "0.0.0.0" ] || [ "$HOST" = "::" ]; then
   if [ -z "$lan_ip" ] && command -v ip >/dev/null 2>&1; then
     lan_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')" || lan_ip=""
   fi
-  echo "[run] 访问地址：http://127.0.0.1:${PORT}（本机）"
+  echo "[run] 访问地址：https://127.0.0.1:${PORT}（本机；自签名证书首次访问需在浏览器手动信任）"
   if [ -n "$lan_ip" ]; then
-    echo "[run] 局域网访问：http://${lan_ip}:${PORT}（其他设备；若无法访问请检查防火墙放行 ${PORT}/tcp）"
+    echo "[run] 局域网访问：https://${lan_ip}:${PORT}（其他设备；若无法访问请检查防火墙放行 ${PORT}/tcp）"
   else
-    echo "[run] 局域网访问：http://<本机IP>:${PORT}（自动探测不可用；若无法访问请检查防火墙放行 ${PORT}/tcp）"
+    echo "[run] 局域网访问：https://<本机IP>:${PORT}（自动探测不可用；若无法访问请检查防火墙放行 ${PORT}/tcp）"
   fi
 else
-  echo "[run] 访问地址：http://${HOST}:${PORT}"
+  echo "[run] 访问地址：https://${HOST}:${PORT}"
 fi
 
 # 4) 等待子进程退出；若 wait 被信号陷阱打断（子进程仍在运行）则继续等待
@@ -382,17 +367,21 @@ case "$HOST" in
 esac
 PORT="$(sed -n 's/^[[:space:]]*PORT[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)"
 PORT="${PORT:-3000}"
+case "$HOST" in
+  *:*) CURL_HOST="[$HOST]" ;;
+  *) CURL_HOST="$HOST" ;;
+esac
 if command -v curl >/dev/null 2>&1; then
   ok=0
   for _ in $(seq 1 30); do
-    if curl -fsS --max-time 2 "http://${HOST}:${PORT}/" >/dev/null 2>&1; then
+    if curl -kfsS --max-time 2 "https://${CURL_HOST}:${PORT}/" >/dev/null 2>&1; then
       ok=1
       break
     fi
     sleep 1
   done
   if [ "$ok" -ne 1 ]; then
-    echo "错误：服务已启动但健康检查失败（http://${HOST}:${PORT}/）。最近日志：" >&2
+    echo "错误：服务已启动但健康检查失败（https://${CURL_HOST}:${PORT}/）。最近日志：" >&2
     systemctl --no-pager -l status "$SERVICE_NAME" | tail -n 20 >&2 || true
     exit 1
   fi
@@ -404,7 +393,7 @@ echo "  服务：$SERVICE_NAME.service（已设为开机自启）"
 echo "  程序：$INSTALL_DIR"
 echo "  数据：$DATA_DIR/app.db"
 echo "  配置：$ENV_FILE（root 600；修改后 systemctl restart $SERVICE_NAME）"
-echo "  访问：http://${HOST}:${PORT}/（局域网用本机 IP，别忘了防火墙放行 ${PORT}/tcp）"
+echo "  访问：https://${HOST}:${PORT}/（局域网用本机 IP，别忘了防火墙放行 ${PORT}/tcp；自签名证书需手动信任）"
 echo
 echo "常用命令："
 echo "  sudo systemctl status $SERVICE_NAME"
@@ -570,7 +559,7 @@ chmod 755 "$DIST_DIR/snack-warehouse-backend"
 echo "[build] 后端二进制已就绪：$DIST_DIR/snack-warehouse-backend"
 
 echo "编译成功，产物输出目录：$DIST_DIR/"
-echo "下一步：进入 $DIST_DIR/ 运行 ./run.sh（默认 http://127.0.0.1:3000，Ctrl-C 停止）"
+echo "下一步：进入 $DIST_DIR/ 运行 ./run.sh（默认 https://127.0.0.1:3000，Ctrl-C 停止）"
 echo "  cd $DIST_DIR && ./run.sh"
 echo "部署脚本：$DIST_DIR/{run.sh,install.sh,uninstall.sh}"
 echo "手动方式（可选）：cd $DIST_DIR && SNACK_DB_PATH=data/app.db ./snack-warehouse-backend"

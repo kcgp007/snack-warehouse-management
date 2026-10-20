@@ -39,7 +39,7 @@ snack-warehouse-management/
 dist/                # 编译产物目录（由 build.sh 生成，不入 git）
 │   ├── snack-warehouse-backend   # 后端二进制
 │   ├── static/                   # 前端静态资源
-│   ├── run.sh                    # 一键运行脚本（必要时先自动编译）
+│   ├── run.sh                    # 一键运行脚本（HTTPS）
 │   ├── install.sh                # 一键安装为 systemd 系统服务（开机自启）
 │   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除数据）
 ```
@@ -60,7 +60,7 @@ cd dist
 # 路径由脚本自动推导，不依赖环境变量设置
 ```
 
-浏览器访问 <http://127.0.0.1:3000> 即可使用。`run.sh` 同时打印局域网地址（如 `http://192.168.x.x:3000`），手机/其他电脑可直接打开。
+浏览器访问 <https://127.0.0.1:3000> 即可使用（首次会提示自签名证书不受信任，选择继续访问即可，见下文「HTTPS 与证书」）。`run.sh` 同时打印局域网地址（如 `https://192.168.x.x:3000`），手机/其他电脑可直接打开。
 
 手动方式（可选，仅在不使用 `run.sh` 时）：
 
@@ -79,11 +79,25 @@ cd dist
 
 核心路径（后端二进制、静态资源目录、数据库路径）由脚本自动推导（优先当前目录 `dist/`，回退仓库 `backend/` 布局），**不通过环境变量设置**；可通过 `PORT`/`HOST`/`ADMIN_USERNAME`/`ADMIN_PASSWORD` 覆盖非路径配置。
 
+### HTTPS 与证书
+
+服务只以 HTTPS 启动。首次启动时若 `data/certs/server.crt` 与 `data/certs/server.key` 都不存在，会自动生成一对自签名证书（私钥权限 `0600`），路径相对当前运行目录，即：
+
+```text
+<运行目录>/data/certs/server.crt
+<运行目录>/data/certs/server.key
+```
+
+- 浏览器首次访问会提示“证书不受信任/连接不是私密连接”，这是自签名证书的正常现象，选择继续访问即可；手机/其他电脑首次访问同样需要手动信任。
+- 生成的证书包含 `localhost`、`127.0.0.1`、`::1` 以及生成时探测到的本机局域网 IPv4；**如果服务器 IP 变化**，删除这两个文件后重启服务即可重新生成。
+- 如需使用受信任证书（如 Let's Encrypt 签发），把证书与私钥分别覆盖为上述两个文件名（PEM 格式），然后重启服务；若只存在其中一个文件，服务会报错而不会自动覆盖。
+- `curl` 访问自签名证书需加 `-k`：`curl -k https://127.0.0.1:3000/`。
+
 ### 远程无法访问？
 
-1. **确认监听地址**：默认 `HOST=0.0.0.0`（所有网卡）。启动日志应显示 `[server] listening on http://0.0.0.0:3000`；若设了 `HOST=127.0.0.1` 则仅本机可访问。
+1. **确认监听地址**：默认 `HOST=0.0.0.0`（所有网卡）。启动日志应显示 `[server] listening on https://0.0.0.0:3000`；若设了 `HOST=127.0.0.1` 则仅本机可访问。
 2. **防火墙放行**：放行 TCP 3000（或你自定义的 `PORT`）。例如 `sudo ufw allow 3000/tcp`（Ubuntu）。
-3. **用局域网 IP 访问**：在服务器上执行 `hostname -I` 取 IP，其他设备浏览器打开 `http://<该IP>:3000`；两端需在同一局域网（或已配置路由/端口转发）。
+3. **用局域网 IP 访问**：在服务器上执行 `hostname -I` 取 IP，其他设备浏览器打开 `https://<该IP>:3000`；两端需在同一局域网（或已配置路由/端口转发）。
 4. **容器部署**：需同时映射端口（如 `-p 3000:3000`），`HOST` 保持默认 `0.0.0.0` 即可。
 
 ### 默认账号与安全提示
@@ -111,7 +125,7 @@ sudo PROFILE=release ./install.sh # 使用 release 后端（仍会先构建前�
 - 路径由脚本自动推导，**不通过环境变量设置核心路径**（`INSTALL_DIR`/`DATA_DIR`/`SNACK_DB_PATH`/`STATIC_DIR` 等环境变量不再生效）；
 - 首次安装生成 `/etc/snack-warehouse.env`（root 600，仅保留 PORT/HOST/ADMIN_USERNAME/ADMIN_PASSWORD），升级时保留已有配置；
 - 写入 `/etc/systemd/system/snack-warehouse.service`（`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写），设为开机自启并启动；
-- 通过 `curl` 做启动健康检查。
+- 通过 `curl -k` 做启动健康检查（自签名证书）。
 
 常用运维命令：
 

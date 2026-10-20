@@ -32,7 +32,7 @@
 - **一键运行 `run.sh`（repo 根，bash，`set -euo pipefail`）**：
   1) 若 `backend/static/index.html` 或后端二进制不存在，先自动调用 `./build.sh`；
   2) 以环境变量默认值启动后端（支持 `PORT` 默认 3000、`STATIC_DIR`、`SNACK_DB_PATH` 默认 `data/app.db`、`ADMIN_USERNAME`/`ADMIN_PASSWORD`）；
-  3) 前台运行并转发信号（trap SIGINT/SIGTERM，Ctrl-C 能干净退出子进程）；启动成功后打印访问地址（如 `http://127.0.0.1:3000`）。
+  3) 前台运行并转发信号（trap SIGINT/SIGTERM，Ctrl-C 能干净退出子进程）；启动成功后打印访问地址（如 `https://127.0.0.1:3000`；服务以 HTTPS 启动，首次运行自动生成自签名证书到 `data/certs/`）。
   两脚本均需 `chmod +x`，并在 README 的“快速开始”中作为主要方式说明。
 - `backend/static/` 及其内容不提交到 git（.gitignore 已忽略），由 build.sh 生成。
 

@@ -5,10 +5,15 @@
 //! - `STATIC_DIR`：静态资源目录，默认当前工作目录下的 `static`（部署时随二进制同目录）；
 //! - `ADMIN_USERNAME` / `ADMIN_PASSWORD`：admin 自动初始化的覆盖账号（默认 admin / admin123）；
 //! - `HOST`（默认 `0.0.0.0`，监听所有网卡以便局域网远程访问）/ `PORT`（默认 `3000`）。
+//!
+//! 服务以 HTTPS 启动：证书与私钥固定从当前工作目录的 `data/certs/server.crt`、
+//! `data/certs/server.key` 读取；两者都不存在时自动生成自签名证书（浏览器会提示不受信任）。
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
-use snack_warehouse_backend::{build_app, AppConfig};
+use snack_warehouse_backend::{build_app, tls, AppConfig};
 
 fn env_path(key: &str, default: PathBuf) -> PathBuf {
     std::env::var(key)
@@ -37,17 +42,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         static_dir: static_dir.clone(),
     })?;
 
-    let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    eprintln!("[server] listening on http://{addr}");
+    let addr = socket_addr(&host, port)?;
+    let tls = tls::load_or_generate().await?;
+
+    eprintln!("[server] listening on https://{addr}");
     eprintln!("[server] database: {}", db_path.display());
     eprintln!("[server] static dir: {}", static_dir.display());
+    eprintln!(
+        "[server] TLS certificate: {} / {}",
+        tls.cert_path.display(),
+        tls.key_path.display()
+    );
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            eprintln!("[server] shutting down");
-        })
+    let handle = axum_server::Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        eprintln!("[server] shutting down");
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+    });
+
+    axum_server::bind_rustls(addr, tls.config)
+        .handle(handle)
+        .serve(app.into_make_service())
         .await?;
     Ok(())
+}
+
+/// 等待 Ctrl-C 或 SIGTERM（systemd stop / run.sh 转发）。
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// 把 `HOST`/`PORT` 解析为监听地址；裸 IPv6 需要补方括号。
+fn socket_addr(host: &str, port: u16) -> Result<SocketAddr, std::net::AddrParseError> {
+    let text = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    text.parse()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::socket_addr;
+
+    #[test]
+    fn parses_ipv4_and_ipv6_hosts() {
+        assert_eq!(
+            socket_addr("0.0.0.0", 3000).unwrap().to_string(),
+            "0.0.0.0:3000"
+        );
+        assert_eq!(
+            socket_addr("127.0.0.1", 8443).unwrap().to_string(),
+            "127.0.0.1:8443"
+        );
+        assert_eq!(socket_addr("::", 3000).unwrap().to_string(), "[::]:3000");
+        assert_eq!(
+            socket_addr("[::1]", 3000).unwrap().to_string(),
+            "[::1]:3000"
+        );
+        assert!(socket_addr("not-an-ip", 3000).is_err());
+    }
 }
