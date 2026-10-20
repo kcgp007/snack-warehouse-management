@@ -1,3 +1,7 @@
+.snacks-table {
+  min-width: 1120px;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -59,7 +63,11 @@
 
 /* 移动端：库存表列较多，横向滚动而不是把页面撑破 */
 @media (max-width: 720px) {
-  .toolbar {
+  .snacks-table {
+  min-width: 1120px;
+}
+
+.toolbar {
     width: 100%;
   }
 
@@ -78,6 +86,6 @@
   }
 
   .snacks-table {
-    min-width: 980px;
+    min-width: 1120px;
   }
 }

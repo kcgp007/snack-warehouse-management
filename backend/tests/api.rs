@@ -189,6 +189,8 @@ fn snack(name: &str, location: &str, expiry_date: Option<&str>) -> Value {
         "quantity": 1,
         "location": location,
         "purchase_date": null,
+        "production_date": null,
+        "shelf_life_days": null,
         "expiry_date": expiry_date,
         "notes": null
     })
@@ -689,6 +691,223 @@ async fn snacks_lifecycle_status_and_finished_autofill() {
     let updated = resp.json();
     assert_eq!(updated["status"], "in_stock");
     assert!(updated["opened_at"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// 生产日期 / 保质期 / 过期日期：填两项自动算第三项
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn production_shelf_and_expiry_are_derived() {
+    let _guard = test_guard();
+    let dir = TempDir::new("production-shelf");
+    let app = build_app(dir.cfg()).expect("build_app");
+    let token = token_of(&app, "admin", "admin123").await;
+
+    // 生产日期 + 保质期 → 过期日期
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "牛奶", "quantity": 1, "location": "厨房/冰箱",
+            "production_date": "2026-01-01", "shelf_life_days": 30
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let milk = resp.json();
+    assert_eq!(milk["production_date"], "2026-01-01");
+    assert_eq!(milk["shelf_life_days"], 30);
+    assert_eq!(milk["expiry_date"], "2026-01-31");
+
+    // 生产日期 + 过期日期 → 保质期
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "面包", "quantity": 1, "location": "厨房",
+            "production_date": "2026-03-01", "expiry_date": "2026-04-30"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let bread = resp.json();
+    assert_eq!(bread["shelf_life_days"], 60);
+    assert_eq!(bread["expiry_date"], "2026-04-30");
+
+    // 保质期 + 过期日期 → 生产日期
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "饼干", "quantity": 1, "location": "客厅",
+            "shelf_life_days": 10, "expiry_date": "2026-01-11"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let biscuit = resp.json();
+    assert_eq!(biscuit["production_date"], "2026-01-01");
+    assert_eq!(biscuit["shelf_life_days"], 10);
+
+    // 三项齐全且自洽 → 保持原值
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "自洽", "quantity": 1, "location": "客厅",
+            "production_date": "2026-01-01", "shelf_life_days": 30,
+            "expiry_date": "2026-01-31"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // 三项齐全但不自洽 → 400（不静默改写客户端明确给出的值）
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "矛盾", "quantity": 1, "location": "客厅",
+            "production_date": "2026-01-01", "shelf_life_days": 30,
+            "expiry_date": "2026-02-01"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
+    assert!(
+        resp.body.contains("不一致"),
+        "错误信息应说明三项不一致: {}",
+        resp.body
+    );
+
+    // 过期早于生产 → 400
+    let resp = send(
+        &app,
+        "POST",
+        "/api/snacks",
+        Some(&token),
+        Some(json!({
+            "name": "倒挂", "quantity": 1, "location": "客厅",
+            "production_date": "2026-02-01", "expiry_date": "2026-01-01"
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
+
+    // 保质期越界 / 生产日期带时间 → 400
+    for payload in [
+        json!({"name": "负数", "quantity": 1, "location": "客厅", "shelf_life_days": -1}),
+        json!({"name": "过长", "quantity": 1, "location": "客厅", "shelf_life_days": 36_501}),
+        json!({"name": "时间", "quantity": 1, "location": "客厅", "production_date": "2026-01-01T08:00"}),
+    ] {
+        let resp = send(&app, "POST", "/api/snacks", Some(&token), Some(payload)).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "{}", resp.body);
+        assert!(resp.json().get("error").is_some());
+    }
+
+    // PUT 同样自动计算：改生产日期，保质期不变则过期日期顺延
+    let updated = json!({
+        "name": "牛奶", "quantity": 1, "location": "厨房/冰箱",
+        "production_date": "2026-02-01", "shelf_life_days": 30
+    });
+    let resp = send(
+        &app,
+        "PUT",
+        &format!("/api/snacks/{}", milk["id"].as_i64().unwrap()),
+        Some(&token),
+        Some(updated),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.json()["expiry_date"], "2026-03-03");
+
+    // 提醒接口返回的 Snack 字段同样包含生产日期/保质期
+    let resp = send(&app, "GET", "/api/reminders", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let reminders = resp.json();
+    let item = reminders
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "牛奶")
+        .expect("牛奶应在提醒中");
+    assert_eq!(item["production_date"], "2026-02-01");
+    assert_eq!(item["shelf_life_days"], 30);
+}
+
+#[tokio::test]
+async fn legacy_database_gets_production_and_shelf_columns() {
+    let _guard = test_guard();
+    let dir = TempDir::new("legacy-columns");
+    let cfg = dir.cfg();
+
+    // 模拟 v2 存量库：snacks 表没有 production_date / shelf_life_days。
+    {
+        let conn = rusqlite::Connection::open(&cfg.db_path).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE snacks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                location TEXT NOT NULL,
+                purchase_date TEXT,
+                expiry_date TEXT,
+                opened_at TEXT,
+                finished_at TEXT,
+                status TEXT NOT NULL DEFAULT 'in_stock',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO snacks (name, quantity, location, created_at, updated_at)              VALUES ('旧库零食', 1, '客厅', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let app = build_app(cfg).expect("build_app migrates columns");
+    let token = token_of(&app, "admin", "admin123").await;
+    let resp = send(&app, "GET", "/api/snacks", Some(&token), None).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let items = resp.json();
+    let old = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "旧库零食")
+        .expect("旧库记录");
+    assert!(old["production_date"].is_null());
+    assert!(old["shelf_life_days"].is_null());
+
+    // 旧库行可通过 PUT 写入新字段并自动推导
+    let id = old["id"].as_i64().unwrap();
+    let resp = send(
+        &app,
+        "PUT",
+        &format!("/api/snacks/{id}"),
+        Some(&token),
+        Some(json!({
+            "name": "旧库零食", "quantity": 1, "location": "客厅",
+            "production_date": "2026-01-01", "shelf_life_days": 7
+        })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.json()["expiry_date"], "2026-01-08");
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ use axum::Json;
 use serde::Serialize;
 
 use crate::error::ApiError;
-use crate::snacks::{row_to_snack, Snack};
+use crate::snacks::{row_to_snack, Snack, SELECT_COLUMNS};
 use crate::util::{days_until, today_plus_days};
 use crate::AppState;
 
@@ -26,12 +26,12 @@ pub struct Reminder {
 pub(crate) async fn list(State(state): State<AppState>) -> Result<Json<Vec<Reminder>>, ApiError> {
     let cutoff = today_plus_days(7);
     let conn = state.conn();
-    let mut stmt = conn.prepare(
-        "SELECT id, name, quantity, location, purchase_date, expiry_date, opened_at, \
-         finished_at, status, notes, created_at, updated_at FROM snacks \
+    let sql = format!(
+        "SELECT {SELECT_COLUMNS} FROM snacks \
          WHERE expiry_date IS NOT NULL AND expiry_date <= ?1 AND status != 'finished' \
-         ORDER BY expiry_date ASC, id ASC",
-    )?;
+         ORDER BY expiry_date ASC, id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([&cutoff], row_to_snack)?;
 
     let mut reminders = Vec::new();

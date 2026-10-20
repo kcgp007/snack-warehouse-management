@@ -56,6 +56,8 @@
         <th>数量</th>
         <th>存放位置</th>
         <th>购买日期</th>
+        <th>生产日期</th>
+        <th>保质期</th>
         <th>过期日期</th>
         <th>过期状态</th>
         <th>生命周期</th>
@@ -72,6 +74,8 @@
           <td>{{ snack.quantity }}</td>
           <td>{{ snack.location }}</td>
           <td>{{ snack.purchase_date ?? '—' }}</td>
+          <td>{{ snack.production_date ?? '—' }}</td>
+          <td>{{ snack.shelf_life_days === null ? '—' : snack.shelf_life_days + ' 天' }}</td>
           <td>{{ snack.expiry_date ?? '—' }}</td>
           <td>
             <span class="badge" [attr.data-status]="expiryBadgeOf(snack).cls">{{
@@ -115,7 +119,7 @@
         </tr>
       } @empty {
         <tr>
-          <td class="empty" colspan="11">
+          <td class="empty" colspan="13">
             {{ loading() ? '正在加载…' : '暂无零食，点击“+ 添加零食”创建第一条记录。' }}
           </td>
         </tr>
@@ -218,6 +222,53 @@
         </div>
         <div class="field-row">
           <label class="field">
+            <span>生产日期</span>
+            <input
+              name="production_date"
+              type="date"
+              [ngModel]="form().production_date"
+              (ngModelChange)="onLifecycleDateChange('production_date', $event)"
+            />
+          </label>
+          <label class="field">
+            <span>保质期（天）</span>
+            <input
+              name="shelf_life_days"
+              type="number"
+              min="0"
+              max="36500"
+              step="1"
+              placeholder="如 180"
+              [class.invalid]="touched().shelf_life_days && fieldError('shelf_life_days')"
+              [attr.aria-invalid]="
+                touched().shelf_life_days && fieldError('shelf_life_days') ? 'true' : null
+              "
+              [ngModel]="form().shelf_life_days"
+              (ngModelChange)="onShelfLifeChange($event)"
+              (blur)="markTouched('shelf_life_days')"
+            />
+            @if (touched().shelf_life_days && fieldError('shelf_life_days')) {
+              <p class="field-error" role="alert">{{ fieldError('shelf_life_days') }}</p>
+            }
+          </label>
+          <label class="field">
+            <span>过期日期</span>
+            <input
+              name="expiry_date"
+              type="date"
+              [ngModel]="form().expiry_date"
+              (ngModelChange)="onLifecycleDateChange('expiry_date', $event)"
+            />
+          </label>
+        </div>
+        <p class="form-hint">
+          生产日期、保质期（天）、过期日期：填写任意两项，第三项会自动计算。
+        </p>
+        @if (dateRangeError()) {
+          <p class="field-error" role="alert">{{ dateRangeError() }}</p>
+        }
+        <div class="field-row">
+          <label class="field">
             <span>购买日期</span>
             <input
               name="purchase_date"
@@ -226,17 +277,6 @@
               (ngModelChange)="patch({ purchase_date: $event })"
             />
           </label>
-          <label class="field">
-            <span>过期日期</span>
-            <input
-              name="expiry_date"
-              type="date"
-              [ngModel]="form().expiry_date"
-              (ngModelChange)="patch({ expiry_date: $event })"
-            />
-          </label>
-        </div>
-        <div class="field-row">
           <label class="field">
             <span>状态</span>
             <select
@@ -249,6 +289,8 @@
               <option value="finished">已吃完</option>
             </select>
           </label>
+        </div>
+        <div class="field-row">
           <label class="field">
             <span>打开日期（选填）</span>
             <input

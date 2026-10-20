@@ -15,13 +15,21 @@ import {
 } from '../../snack-status';
 import { ReminderService } from '../../services/reminder.service';
 import { SnackService } from '../../services/snack.service';
-import { SnackFormModel, formToSnackInput, lifecycleTimes } from './snack-form';
+import {
+  LifecycleDateField,
+  SnackFormModel,
+  deriveDates,
+  formToSnackInput,
+  lifecycleTimes,
+} from './snack-form';
 
 const emptyForm = (): SnackFormModel => ({
   name: '',
   quantity: '1',
   location: '',
   purchase_date: '',
+  production_date: '',
+  shelf_life_days: '',
   expiry_date: '',
   notes: '',
   status: 'in_stock',
@@ -39,6 +47,8 @@ function snackToInput(snack: Snack): SnackInput {
     quantity: snack.quantity,
     location: snack.location,
     purchase_date: snack.purchase_date,
+    production_date: snack.production_date,
+    shelf_life_days: snack.shelf_life_days,
     expiry_date: snack.expiry_date,
     notes: snack.notes,
     status: snack.status,
@@ -68,10 +78,13 @@ export class Snacks {
   protected readonly editing = signal<Snack | null>(null);
   protected readonly form = signal<SnackFormModel>(emptyForm());
   protected readonly formError = signal('');
-  protected readonly touched = signal<Record<'name' | 'quantity' | 'location', boolean>>({
+  protected readonly touched = signal<
+    Record<'name' | 'quantity' | 'location' | 'shelf_life_days', boolean>
+  >({
     name: false,
     quantity: false,
     location: false,
+    shelf_life_days: false,
   });
   protected readonly saving = signal(false);
   /** 正在执行快捷动作的零食 id（仅禁用该行按钮，其他行仍可操作）。 */
@@ -172,7 +185,12 @@ export class Snacks {
     this.editing.set(null);
     this.form.set(emptyForm());
     this.formError.set('');
-    this.touched.set({ name: false, quantity: false, location: false });
+    this.touched.set({
+      name: false,
+      quantity: false,
+      location: false,
+      shelf_life_days: false,
+    });
     this.notice.set('');
     this.resetLocationSuggestions();
     this.modalOpen.set(true);
@@ -185,6 +203,8 @@ export class Snacks {
       quantity: String(snack.quantity),
       location: snack.location,
       purchase_date: snack.purchase_date ?? '',
+      production_date: snack.production_date ?? '',
+      shelf_life_days: snack.shelf_life_days === null ? '' : String(snack.shelf_life_days),
       expiry_date: snack.expiry_date ?? '',
       notes: snack.notes ?? '',
       status: snack.status,
@@ -192,7 +212,12 @@ export class Snacks {
       finished_at: snack.finished_at ?? '',
     });
     this.formError.set('');
-    this.touched.set({ name: false, quantity: false, location: false });
+    this.touched.set({
+      name: false,
+      quantity: false,
+      location: false,
+      shelf_life_days: false,
+    });
     this.notice.set('');
     this.resetLocationSuggestions();
     this.modalOpen.set(true);
@@ -271,19 +296,44 @@ export class Snacks {
     this.patch({ quantity: value == null ? '' : String(value) });
   }
 
+  /**
+   * 生产日期 / 保质期 / 过期日期联动：以本次修改的字段为基准，
+   * 填满任意两项后自动计算第三项（见 `deriveDates`）。
+   */
+  protected onLifecycleDateChange(field: LifecycleDateField, value: string): void {
+    const next = { ...this.form(), [field]: value };
+    this.patch({ [field]: value, ...deriveDates(next, field) });
+  }
+
+  protected onShelfLifeChange(value: unknown): void {
+    this.onLifecycleDateChange('shelf_life_days', value == null ? '' : String(value));
+  }
+
   /** 字段失焦后展示该字段的即时校验提示。 */
-  protected markTouched(field: 'name' | 'quantity' | 'location'): void {
+  protected markTouched(
+    field: 'name' | 'quantity' | 'location' | 'shelf_life_days',
+  ): void {
     this.touched.update((value) => ({ ...value, [field]: true }));
   }
 
   /** 即时字段错误；空串表示通过。 */
-  protected fieldError(field: 'name' | 'quantity' | 'location'): string {
+  protected fieldError(field: 'name' | 'quantity' | 'location' | 'shelf_life_days'): string {
     const form = this.form();
     if (field === 'name' && !form.name.trim()) {
       return '请输入零食名称';
     }
     if (field === 'location' && !form.location.trim()) {
       return '请输入存放位置';
+    }
+    if (field === 'shelf_life_days') {
+      const raw = form.shelf_life_days.trim();
+      if (!raw) {
+        return '';
+      }
+      const days = Number(raw);
+      if (!Number.isInteger(days) || days < 0 || days > 36_500) {
+        return '保质期必须是不小于 0 且不超过 36500 的整数（天）';
+      }
     }
     if (field === 'quantity') {
       const raw = form.quantity.trim();
@@ -298,14 +348,30 @@ export class Snacks {
     return '';
   }
 
+  /** 生产日期与过期日期的跨字段校验。 */
+  protected dateRangeError(): string {
+    const form = this.form();
+    if (!form.production_date || !form.expiry_date) {
+      return '';
+    }
+    const production = Date.parse(`${form.production_date}T00:00:00Z`);
+    const expiry = Date.parse(`${form.expiry_date}T00:00:00Z`);
+    return expiry < production ? '过期日期不能早于生产日期' : '';
+  }
+
   protected save(): void {
     const form = this.form();
     this.formError.set('');
-    this.touched.set({ name: true, quantity: true, location: true });
-    const invalid = (['name', 'quantity', 'location'] as const).find(
-      (field) => this.fieldError(field) !== '',
-    );
-    if (invalid) {
+    this.touched.set({
+      name: true,
+      quantity: true,
+      location: true,
+      shelf_life_days: true,
+    });
+    const invalid = (
+      ['name', 'quantity', 'location', 'shelf_life_days'] as const
+    ).find((field) => this.fieldError(field) !== '');
+    if (invalid || this.dateRangeError()) {
       return;
     }
     // 状态/日期一致性归一化（契约 §3）：finished 才带 finished_at（留空则填当前日期），

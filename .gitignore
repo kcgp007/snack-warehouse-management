@@ -22,3 +22,6 @@ data/
 .vscode/
 .idea/
 *.log
+
+# 编译产物（build.sh 生成）
+/dist/

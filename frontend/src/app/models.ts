@@ -28,6 +28,10 @@ export interface SnackInput {
   quantity: number;
   location: string;
   purchase_date: string | null;
+  /** 生产日期 YYYY-MM-DD，可为 null */
+  production_date: string | null;
+  /** 保质期（天），可为 null；与生产/过期日期任意两项可互相推导 */
+  shelf_life_days: number | null;
   expiry_date: string | null;
   notes: string | null;
   status: SnackLifecycle;

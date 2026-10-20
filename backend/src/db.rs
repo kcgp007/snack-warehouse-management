@@ -50,6 +50,8 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             quantity      INTEGER NOT NULL DEFAULT 1,
             location      TEXT NOT NULL,
             purchase_date TEXT,
+            production_date TEXT,
+            shelf_life_days INTEGER,
             expiry_date   TEXT,
             opened_at     TEXT,
             finished_at   TEXT,
@@ -60,8 +62,29 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         "#,
     )?;
+    ensure_snack_columns(conn)?;
     normalize_legacy_lifecycle_dates(conn)?;
     purge_expired_sessions(conn)?;
+    Ok(())
+}
+
+/// 为 v1/v2 存量数据库补齐 v3 新增列（幂等）。
+///
+/// `CREATE TABLE IF NOT EXISTS` 不会修改已存在的表，因此升级安装必须显式
+/// `ALTER TABLE ... ADD COLUMN`；用 `PRAGMA table_info` 判断可重复执行。
+fn ensure_snack_columns(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let columns: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(snacks)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let has = |name: &str| columns.iter().any(|column| column == name);
+    if !has("production_date") {
+        conn.execute_batch("ALTER TABLE snacks ADD COLUMN production_date TEXT;")?;
+    }
+    if !has("shelf_life_days") {
+        conn.execute_batch("ALTER TABLE snacks ADD COLUMN shelf_life_days INTEGER;")?;
+    }
     Ok(())
 }
 

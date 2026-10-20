@@ -8,6 +8,8 @@ function reminder(id: number, level: Reminder['level']): Reminder {
     quantity: 1,
     location: '客厅/零食柜',
     purchase_date: null,
+    production_date: null,
+    shelf_life_days: null,
     expiry_date: '2026-01-01',
     notes: null,
     status: 'in_stock',
