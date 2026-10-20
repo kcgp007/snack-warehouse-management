@@ -44,7 +44,8 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<UserOut> {
 /// `GET /api/users` — 用户数组。
 pub(crate) async fn list(State(state): State<AppState>) -> Result<Json<Vec<UserOut>>, ApiError> {
     let conn = state.conn();
-    let mut stmt = conn.prepare(&format!("SELECT {USER_COLUMNS} FROM users ORDER BY id ASC"))?;
+    // 用户列表按用户名字母顺序，便于查找（契约 §4）。
+    let mut stmt = conn.prepare(&format!("SELECT {USER_COLUMNS} FROM users ORDER BY username ASC"))?;
     let rows = stmt.query_map([], row_to_user)?;
     let users = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(Json(users))

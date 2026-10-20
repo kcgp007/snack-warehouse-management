@@ -1037,9 +1037,9 @@ async fn snacks_list_filters() {
     // 4 面条：无过期日期，in_stock
     create_snack(&app, &token, snack("面条", "阳台/储物箱", None)).await;
 
-    // 缺省 → 全部（裸数组）
+    // 缺省 → 全部（裸数组，最新创建优先）
     let resp = send(&app, "GET", "/api/snacks", Some(&token), None).await;
-    assert_eq!(names(&resp.json()), vec!["薯片", "牛奶", "饼干", "面条"]);
+    assert_eq!(names(&resp.json()), vec!["面条", "饼干", "牛奶", "薯片"]);
 
     // q 匹配 name
     let resp = send(&app, "GET", "/api/snacks?q=薯", Some(&token), None).await;
@@ -1060,7 +1060,7 @@ async fn snacks_list_filters() {
         None,
     )
     .await;
-    assert_eq!(names(&resp.json()), vec!["薯片", "饼干"]);
+    assert_eq!(names(&resp.json()), vec!["饼干", "薯片"]);
 
     // expiry_status 过期维度（契约改名后的参数）
     let resp = send(
@@ -1089,7 +1089,7 @@ async fn snacks_list_filters() {
         None,
     )
     .await;
-    assert_eq!(names(&resp.json()), vec!["饼干", "面条"]);
+    assert_eq!(names(&resp.json()), vec!["面条", "饼干"]);
     let resp = send(
         &app,
         "GET",
@@ -1109,7 +1109,7 @@ async fn snacks_list_filters() {
         None,
     )
     .await;
-    assert_eq!(names(&resp.json()), vec!["薯片", "面条"]);
+    assert_eq!(names(&resp.json()), vec!["面条", "薯片"]);
     let resp = send(&app, "GET", "/api/snacks?status=opened", Some(&token), None).await;
     assert_eq!(names(&resp.json()), vec!["牛奶"]);
     let resp = send(
@@ -1236,9 +1236,9 @@ async fn snacks_search_escapes_like_wildcards() {
     let resp = send(&app, "GET", "/api/snacks?q=a_b", Some(&token), None).await;
     assert_eq!(names(&resp.json()), vec!["薯条a_b口味"]);
 
-    // 普通子串搜索不受转义影响：`100` 仍同时命中两个名称
+    // 普通子串搜索不受转义影响：`100` 仍同时命中两个名称（最新创建优先）
     let resp = send(&app, "GET", "/api/snacks?q=100", Some(&token), None).await;
-    assert_eq!(names(&resp.json()), vec!["能量棒100%", "能量棒100袋"]);
+    assert_eq!(names(&resp.json()), vec!["能量棒100袋", "能量棒100%"]);
 
     // locations 的 q 同样执行 LIKE 转义：`100%` 不得命中 `折扣100袋`
     let resp = send(&app, "GET", "/api/locations?q=100%25", Some(&token), None).await;

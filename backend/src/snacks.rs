@@ -349,7 +349,8 @@ pub(crate) async fn list(
         sql.push_str(" WHERE ");
         sql.push_str(&wheres.join(" AND "));
     }
-    sql.push_str(" ORDER BY id ASC");
+    // 最新创建的零食优先展示（契约 §4：列表默认按创建时间倒序，id 作为确定性 tie-breaker）。
+    sql.push_str(" ORDER BY created_at DESC, id DESC");
 
     let conn = state.conn();
     let mut stmt = conn.prepare(&sql)?;
