@@ -78,11 +78,7 @@
 
 /* 移动端：库存表列较多，横向滚动而不是把页面撑破 */
 @media (max-width: 720px) {
-  .snacks-table {
-  min-width: 1120px;
-}
-
-.toolbar {
+  .toolbar {
     width: 100%;
   }
 
@@ -91,16 +87,26 @@
     min-width: 0;
   }
 
-  .toolbar select {
+  .toolbar select,
+  .toolbar .btn {
     flex: 1 1 calc(50% - 9px);
     min-width: 0;
   }
 
-  .toolbar .btn {
-    flex: 1 1 100%;
+  .field-row {
+    gap: 10px;
+  }
+}
+
+/* 极小屏幕：保质期数值与单位上下排列，避免被挤压 */
+@media (max-width: 480px) {
+  .shelf-field {
+    flex-direction: column;
   }
 
-  .snacks-table {
-    min-width: 1120px;
+  .shelf-field input,
+  .shelf-field select {
+    width: 100%;
+    flex: 0 0 auto;
   }
 }
