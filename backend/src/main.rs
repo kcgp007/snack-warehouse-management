@@ -1,9 +1,10 @@
 //! 服务入口：读取运行目录下的 `snack-warehouse.toml` 配置文件，构建应用并监听端口。
 //!
-//! 配置文件（优先）：运行目录下的 `snack-warehouse.toml`（与二进制同级）。
+//! 配置文件：运行目录下的 `snack-warehouse.toml`（与二进制同级）。
 //! 配置项：`host`（默认 `0.0.0.0`）、`port`（默认 `3000`）、
+//! `db_path`（默认 `data/app.db`）、`static_dir`（默认 `static`）、
 //! `admin_username`（默认 `admin`）、`admin_password`（默认 `admin123`）。
-//! 未设置的项使用默认值；不再读取 `/etc/snack-warehouse.env` 环境变量文件。
+//! 未设置的项使用默认值；不读取任何环境变量或环境变量配置文件。
 //!
 //! 服务以 HTTPS 启动：证书与私钥固定从当前工作目录的 `data/certs/server.crt`、
 //! `data/certs/server.key` 读取；两者都不存在时自动生成自签名证书（浏览器会提示不受信任）。
@@ -19,9 +20,10 @@ const CONFIG_FILE: &str = "snack-warehouse.toml";
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct ServerConfig {
-    // Flat TOML format (no nested [section] tables needed — keys are direct)
     pub host: Option<String>,
     pub port: Option<u16>,
+    pub db_path: Option<String>,
+    pub static_dir: Option<String>,
     pub admin_username: Option<String>,
     pub admin_password: Option<String>,
 }
@@ -39,20 +41,16 @@ fn load_server_config() -> ServerConfig {
     }
 }
 
-fn env_path(key: &str, default: PathBuf) -> PathBuf {
-    std::env::var(key)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or(default)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_server_config();
 
-    let db_path = env_path("SNACK_DB_PATH", PathBuf::from("data/app.db"));
-    let static_dir = env_path("STATIC_DIR", PathBuf::from("static"));
+    let db_path = cfg.db_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("data/app.db"));
+    let static_dir = cfg.static_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("static"));
     let host = cfg.host.unwrap_or_else(|| "0.0.0.0".to_owned());
     let port = cfg.port.unwrap_or(3000);
     let admin_username = cfg.admin_username.unwrap_or_else(|| "admin".to_owned());
