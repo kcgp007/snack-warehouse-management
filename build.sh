@@ -132,13 +132,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="$ROOT_DIR"
+SERVICE_NAME=snack-warehouse
+INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变量覆盖
 DATA_DIR="$ROOT_DIR/data"
 ENV_FILE="/etc/snack-warehouse.env"
-RUN_USER="${RUN_USER:-snack-warehouse}"
+RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-PROFILE="${PROFILE:-debug}"
+PROFILE=debug
 
 SKIP_BUILD=0
 
@@ -421,11 +421,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-SERVICE_NAME="${SERVICE_NAME:-snack-warehouse}"
-INSTALL_DIR="$ROOT_DIR"
+SERVICE_NAME=snack-warehouse
+INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变量覆盖
 DATA_DIR="$ROOT_DIR/data"
 ENV_FILE="/etc/snack-warehouse.env"
-RUN_USER="${RUN_USER:-snack-warehouse}"
+RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 PURGE=0
