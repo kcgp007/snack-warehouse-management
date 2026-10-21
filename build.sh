@@ -60,43 +60,18 @@ forward() {
 trap 'forward INT' INT
 trap 'forward TERM' TERM
 
-# 配置项可用环境变量覆盖（非路径）：PORT/HOST/ADMIN_USERNAME/ADMIN_PASSWORD
-# 核心路径由脚本自动推导，不读环境变量
-PORT="${PORT:-3000}"
-HOST="${HOST:-0.0.0.0}"
-ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
-export PORT HOST ADMIN_USERNAME ADMIN_PASSWORD
-# 核心路径只由脚本推导，避免外部环境变量把数据/静态目录指到别处
-unset SNACK_DB_PATH
-
-# 相对路径统一相对运行目录解析
+# 配置：运行目录下的 snack-warehouse.toml（与二进制同级），由后端自行读取；
+# 本脚本不再导出环境变量，核心路径由脚本自动推导。
 cd "$ROOT_DIR"
 
-DB_PATH="$ROOT_DIR/data/app.db"
 echo "[run] 启动后端：$BACKEND_BIN"
-echo "[run] 数据库：$DB_PATH（STATIC_DIR=$STATIC_DIR）"
+echo "[run] 数据库：$ROOT_DIR/data/app.db（静态资源：$STATIC_DIR）"
 echo "[run] 运行目录：$ROOT_DIR"
+echo "[run] 配置：运行目录下的 snack-warehouse.toml（缺失则使用默认值 host=0.0.0.0 port=3000 admin=admin/admin123）"
 "$BACKEND_BIN" &
 child=$!
-if [ "$HOST" = "0.0.0.0" ] || [ "$HOST" = "::" ]; then
-  # 通配地址：同时提示本机与局域网访问方式（IP 探测失败不影响运行）
-  lan_ip=""
-  if command -v hostname >/dev/null 2>&1; then
-    lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')" || lan_ip=""
-  fi
-  if [ -z "$lan_ip" ] && command -v ip >/dev/null 2>&1; then
-    lan_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')" || lan_ip=""
-  fi
-  echo "[run] 访问地址：https://127.0.0.1:${PORT}（本机；自签名证书首次访问需在浏览器手动信任）"
-  if [ -n "$lan_ip" ]; then
-    echo "[run] 局域网访问：https://${lan_ip}:${PORT}（其他设备；若无法访问请检查防火墙放行 ${PORT}/tcp）"
-  else
-    echo "[run] 局域网访问：https://<本机IP>:${PORT}（自动探测不可用；若无法访问请检查防火墙放行 ${PORT}/tcp）"
-  fi
-else
-  echo "[run] 访问地址：https://${HOST}:${PORT}"
-fi
+echo "[run] 访问地址：https://127.0.0.1:3000（本机；自签名证书首次访问需在浏览器手动信任）"
+echo "[run] 局域网访问：请在浏览器中输入 https://<本机IP>:3000（若无法访问请检查防火墙放行 3000/tcp）"
 
 # 4) 等待子进程退出；若 wait 被信号陷阱打断（子进程仍在运行）则继续等待
 set +e
@@ -135,7 +110,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME=snack-warehouse
 INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变量覆盖
 DATA_DIR="$ROOT_DIR/data"
-ENV_FILE="/etc/snack-warehouse.env"
+# 配置文件：运行目录下的 snack-warehouse.toml（非 /etc 目录下的环境变量文件）
+CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 PROFILE=debug
@@ -305,22 +281,20 @@ chown "$RUN_USER:$RUN_USER" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
 # 5) 环境变量文件：首次安装生成，升级时保留用户修改
-if [ ! -f "$ENV_FILE" ]; then
-  echo "[install] 生成配置文件：$ENV_FILE"
-  install -m 600 /dev/null "$ENV_FILE"
-  cat > "$ENV_FILE" <<ENV_EOF
-# 零食仓库管理平台 —— systemd 服务环境变量
-# 修改后执行：sudo systemctl restart $SERVICE_NAME
-HOST=0.0.0.0
-PORT=3000
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin123
-ENV_EOF
-  chmod 600 "$ENV_FILE"
-  chown root:root "$ENV_FILE"
-  echo "[install] ⚠️  默认管理员密码为 admin123，请登录后立即修改（或先编辑 $ENV_FILE 再重启服务）。"
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "[install] 生成配置文件：$CONFIG_FILE（TOML 格式，运行目录下）"
+  install -m 600 /dev/null "$CONFIG_FILE"
+  cat > "$CONFIG_FILE" <<TOML_EOF
+host = "0.0.0.0"
+port = 3000
+admin_username = "admin"
+admin_password = "admin123"
+TOML_EOF
+  chmod 600 "$CONFIG_FILE"
+  chown root:root "$CONFIG_FILE"
+  echo "[install] ⚠️  默认管理员密码为 admin123，请登录后立即修改（或先编辑 $CONFIG_FILE 再重启服务）。"
 else
-  echo "[install] 保留已有配置文件：$ENV_FILE"
+  echo "[install] 保留已有配置文件：$CONFIG_FILE（TOML 格式，运行目录下）"
 fi
 
 # 6) systemd unit
@@ -339,7 +313,8 @@ Type=simple
 User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$INSTALL_DIR
-EnvironmentFile=$ENV_FILE
+# 配置由运行目录下的 TOML 文件读取，不再使用 EnvironmentFile
+# （后端 main.rs 从运行目录的 snack-warehouse.toml 读取配置）
 ExecStart=$INSTALL_DIR/snack-warehouse-backend
 Restart=on-failure
 RestartSec=3
@@ -361,12 +336,12 @@ systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
 # 7) 健康检查（从配置文件读取监听地址与端口）
-HOST="$(sed -n 's/^[[:space:]]*HOST[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)"
+HOST="0.0.0.0"  # 健康检查使用默认监听地址（实际配置由运行目录 TOML 提供）
 case "$HOST" in
   ""|0.0.0.0|::|\[::\]) HOST=127.0.0.1 ;;
 esac
-PORT="$(sed -n 's/^[[:space:]]*PORT[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)"
-PORT="${PORT:-3000}"
+PORT="3000"  # 健康检查使用默认端口（实际配置由运行目录 TOML 提供）
+PORT="3000"
 case "$HOST" in
   *:*) CURL_HOST="[$HOST]" ;;
   *) CURL_HOST="$HOST" ;;
@@ -392,7 +367,7 @@ echo "安装完成 ✅"
 echo "  服务：$SERVICE_NAME.service（已设为开机自启）"
 echo "  程序：$INSTALL_DIR"
 echo "  数据：$DATA_DIR/app.db"
-echo "  配置：$ENV_FILE（root 600；修改后 systemctl restart $SERVICE_NAME）"
+echo "  配置：$CONFIG_FILE（root 600；修改后 systemctl restart $SERVICE_NAME）"
 echo "  访问：https://${HOST}:${PORT}/（局域网用本机 IP，别忘了防火墙放行 ${PORT}/tcp；自签名证书需手动信任）"
 echo
 echo "常用命令："
@@ -424,7 +399,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME=snack-warehouse
 INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变量覆盖
 DATA_DIR="$ROOT_DIR/data"
-ENV_FILE="/etc/snack-warehouse.env"
+# 配置文件：运行目录下的 snack-warehouse.toml（非 /etc 目录下的环境变量文件）
+CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -473,7 +449,7 @@ if [ "$PURGE" -eq 1 ] && [ "$ASSUME_YES" -eq 0 ]; then
   echo "即将彻底删除以下内容："
   echo "  服务：$SERVICE_NAME.service"
   echo "  程序：$INSTALL_DIR"
-  echo "  配置：$ENV_FILE"
+  echo "  配置：$CONFIG_FILE"
   echo "  数据：$DATA_DIR（含数据库，不可恢复）"
   echo "  用户：$RUN_USER"
   printf '确认请输入 yes：'
@@ -514,9 +490,9 @@ fi
 
 # 3) 可选：删除配置、数据与运行用户
 if [ "$PURGE" -eq 1 ]; then
-  if [ -f "$ENV_FILE" ]; then
-    echo "[uninstall] 删除配置文件：$ENV_FILE"
-    rm -f "$ENV_FILE"
+  if [ -f "$CONFIG_FILE" ]; then
+    echo "[uninstall] 删除配置文件：$CONFIG_FILE"
+    rm -f "$CONFIG_FILE"
   fi
   if [ -d "$DATA_DIR" ]; then
     echo "[uninstall] 删除数据目录：$DATA_DIR（含数据库）"
@@ -535,7 +511,7 @@ else
   echo
   echo "卸载完成 ✅"
   echo "已保留配置与数据（重新安装会继续使用）："
-  echo "  配置：$ENV_FILE"
+  echo "  配置：$CONFIG_FILE"
   echo "  数据：$DATA_DIR"
   echo "如需彻底删除，请执行：sudo ./uninstall.sh --purge"
 fi

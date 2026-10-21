@@ -9,11 +9,14 @@ use rusqlite::OptionalExtension;
 use crate::auth;
 use crate::util;
 
-pub(crate) const DEFAULT_ADMIN_USERNAME: &str = "admin";
 pub(crate) const DEFAULT_ADMIN_PASSWORD: &str = "admin123";
 
 /// 打开数据库文件（自动创建父目录），执行 PRAGMA、建表与 admin 幂等初始化。
-pub(crate) fn open(path: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
+pub(crate) fn open(
+    path: &Path,
+    admin_username: &str,
+    admin_password: &str,
+) -> Result<Connection, Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
@@ -21,7 +24,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection, Box<dyn std::error::Error>
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     conn.busy_timeout(Duration::from_secs(5))?;
     migrate(&conn)?;
-    init_admin_from_env(&conn)?;
+    init_admin(&conn, admin_username, admin_password)?;
     Ok(conn)
 }
 
@@ -207,20 +210,6 @@ pub(crate) fn init_admin(
         );
     }
     Ok(true)
-}
-
-/// 读取 `ADMIN_USERNAME` / `ADMIN_PASSWORD`（空值视为未设置）后执行初始化。
-pub(crate) fn init_admin_from_env(conn: &Connection) -> Result<bool, rusqlite::Error> {
-    let username = env_or("ADMIN_USERNAME", DEFAULT_ADMIN_USERNAME);
-    let password = env_or("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD);
-    init_admin(conn, &username, &password)
-}
-
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(test)]

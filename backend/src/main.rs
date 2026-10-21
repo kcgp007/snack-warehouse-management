@@ -1,10 +1,9 @@
-//! 服务入口：读取环境变量，构建应用并监听端口。
+//! 服务入口：读取运行目录下的 `snack-warehouse.toml` 配置文件，构建应用并监听端口。
 //!
-//! 环境变量（契约 §0/§1）：
-//! - `SNACK_DB_PATH`：SQLite 文件路径，默认 `data/app.db`（相对当前工作目录）；
-//! - `STATIC_DIR`：静态资源目录，默认当前工作目录下的 `static`（部署时随二进制同目录）；
-//! - `ADMIN_USERNAME` / `ADMIN_PASSWORD`：admin 自动初始化的覆盖账号（默认 admin / admin123）；
-//! - `HOST`（默认 `0.0.0.0`，监听所有网卡以便局域网远程访问）/ `PORT`（默认 `3000`）。
+//! 配置文件（优先）：运行目录下的 `snack-warehouse.toml`（与二进制同级）。
+//! 配置项：`host`（默认 `0.0.0.0`）、`port`（默认 `3000`）、
+//! `admin_username`（默认 `admin`）、`admin_password`（默认 `admin123`）。
+//! 未设置的项使用默认值；不再读取 `/etc/snack-warehouse.env` 环境变量文件。
 //!
 //! 服务以 HTTPS 启动：证书与私钥固定从当前工作目录的 `data/certs/server.crt`、
 //! `data/certs/server.key` 读取；两者都不存在时自动生成自签名证书（浏览器会提示不受信任）。
@@ -13,7 +12,32 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::middleware;
+use serde::Deserialize;
 use snack_warehouse_backend::{build_app, tls, AppConfig};
+
+const CONFIG_FILE: &str = "snack-warehouse.toml";
+
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct ServerConfig {
+    // Flat TOML format (no nested [section] tables needed — keys are direct)
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub admin_username: Option<String>,
+    pub admin_password: Option<String>,
+}
+
+fn load_server_config() -> ServerConfig {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let config_path = exe_dir.join(CONFIG_FILE);
+
+    match std::fs::read_to_string(&config_path) {
+        Ok(content) => toml::from_str(&content).unwrap_or_default(),
+        Err(_) => ServerConfig::default(),
+    }
+}
 
 fn env_path(key: &str, default: PathBuf) -> PathBuf {
     std::env::var(key)
@@ -25,21 +49,20 @@ fn env_path(key: &str, default: PathBuf) -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_server_config();
+
     let db_path = env_path("SNACK_DB_PATH", PathBuf::from("data/app.db"));
     let static_dir = env_path("STATIC_DIR", PathBuf::from("static"));
-    let host = std::env::var("HOST")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "0.0.0.0".to_owned());
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(3000);
+    let host = cfg.host.unwrap_or_else(|| "0.0.0.0".to_owned());
+    let port = cfg.port.unwrap_or(3000);
+    let admin_username = cfg.admin_username.unwrap_or_else(|| "admin".to_owned());
+    let admin_password = cfg.admin_password.unwrap_or_else(|| "admin123".to_owned());
 
     let app = build_app(AppConfig {
         db_path: db_path.clone(),
         static_dir: static_dir.clone(),
+        admin_username,
+        admin_password,
     })?
     .layer(middleware::from_fn_with_state(
         tls::HttpsPort(port),

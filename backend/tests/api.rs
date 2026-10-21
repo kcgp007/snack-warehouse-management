@@ -11,7 +11,7 @@
 //! - 静态托管与 SPA fallback（含目录不存在的优雅降级）
 //!
 //! 注意：所有测试共用进程级互斥锁串行执行，因为 admin 初始化会读取
-//! 环境变量（ADMIN_USERNAME/ADMIN_PASSWORD），并行会产生竞态。
+//! 配置文件（snack-warehouse.toml）与 admin 幂等初始化测试。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -19,9 +19,19 @@ use std::sync::{Mutex, MutexGuard};
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use snack_warehouse_backend::{build_app, AppConfig};
 use tower::ServiceExt;
+
+/// TOML 服务器配置（测试用：读取 snack-warehouse.toml 中的 admin 凭据覆盖）。
+#[derive(Clone, Debug, Deserialize, Default)]
+struct TomlServerConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub admin_username: Option<String>,
+    pub admin_password: Option<String>,
+}
 
 // ---------------------------------------------------------------------------
 // 测试基础设施
@@ -74,9 +84,22 @@ impl TempDir {
     }
 
     fn cfg(&self) -> AppConfig {
+        let toml_path = self.path().join("snack-warehouse.toml");
+        let overrides = if toml_path.exists() {
+            let content = std::fs::read_to_string(&toml_path).unwrap_or_default();
+            toml::from_str::<TomlServerConfig>(&content).unwrap_or_default()
+        } else {
+            TomlServerConfig::default()
+        };
         AppConfig {
             db_path: self.path.join("app.db"),
             static_dir: self.path.join("static"),
+            admin_username: overrides
+                .admin_username
+                .unwrap_or_else(|| "admin".to_owned()),
+            admin_password: overrides
+                .admin_password
+                .unwrap_or_else(|| "admin123".to_owned()),
         }
     }
 
@@ -1652,17 +1675,20 @@ async fn admin_auto_init_preserves_changed_password() {
 }
 
 #[tokio::test]
-async fn admin_auto_init_respects_env_overrides() {
+async fn admin_auto_init_respects_toml_overrides() {
     let _guard = test_guard();
-    // 全局锁保证设置环境变量期间没有其他测试在启动应用
-    let _env = EnvGuard::set(&[
-        ("ADMIN_USERNAME", "root"),
-        ("ADMIN_PASSWORD", "root-secret-1"),
-    ]);
-    let dir = TempDir::new("admin-init-env");
+    // 全局锁保证写入 TOML 期间没有其他测试在启动应用
+    let dir = TempDir::new("admin-init-toml");
+    let toml_content = r#"
+host = "0.0.0.0"
+port = 3000
+admin_username = "root"
+admin_password = "root-secret-1"
+"#;
+    std::fs::write(dir.path().join("snack-warehouse.toml"), toml_content).unwrap();
     let app = build_app(dir.cfg()).expect("build_app");
 
-    // 按覆盖值创建的管理员可登录
+    // TOML 中设置的管理员可登录
     let body = login(&app, "root", "root-secret-1").await;
     assert_eq!(body["user"]["username"], "root");
     assert_eq!(body["user"]["is_admin"], true);

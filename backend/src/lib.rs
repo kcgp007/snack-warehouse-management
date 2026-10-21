@@ -28,6 +28,8 @@ pub use error::ApiError;
 pub struct AppConfig {
     pub db_path: PathBuf,
     pub static_dir: PathBuf,
+    pub admin_username: String,
+    pub admin_password: String,
 }
 
 /// 全局共享状态：单个 SQLite 连接（互斥访问）与静态资源目录。
@@ -46,7 +48,11 @@ impl AppState {
 
 /// 构建应用：打开并初始化数据库（建表 + admin 幂等初始化），装配路由与认证中间件。
 pub fn build_app(cfg: AppConfig) -> Result<Router, Box<dyn std::error::Error>> {
-    let conn = db::open(&cfg.db_path)?;
+    let conn = db::open(
+        &cfg.db_path,
+        &cfg.admin_username,
+        &cfg.admin_password,
+    )?;
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         static_dir: cfg.static_dir,
