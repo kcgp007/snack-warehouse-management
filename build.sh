@@ -100,7 +100,7 @@ cat > "$DIST_DIR/install.sh" <<'INSTALL_EOF'
 # 安装位置：/opt/snack-warehouse（推荐布局：程序归 root，服务只写 data/）
 # 运行用户：snack-warehouse（不存在时创建为无登录 shell 的系统用户）
 #   - 脚本可放在任意位置（如家目录的 dist/），运行时会把产物部署到 /opt
-#   - 若脚本目录内已有 data/ 或 snack-warehouse.toml（旧版就地安装），会自动迁移
+#   - 不做任何数据迁移：/opt 下已有 data/ 与配置则原样保留，否则全新初始化
 #   - data/ 与配置位于安装目录内；程序/静态资源 a+rX，data 归运行用户
 #   - 仍保留路径兼容检查（noexec、危险路径、穿越权限），异常时提前报错
 # 不使用任何环境变量。
@@ -300,19 +300,6 @@ chmod 755 "$INSTALL_DIR"
 chmod 755 "$INSTALL_DIR/snack-warehouse-backend"
 chmod -R a+rX "$INSTALL_DIR/static"
 [ -f "$INSTALL_DIR/README.md" ] && chmod 644 "$INSTALL_DIR/README.md"
-
-# 旧版就地安装的数据库/配置自动迁移（仅当目标缺失时，避免覆盖现有数据）
-if [ "$ROOT_DIR" != "$INSTALL_DIR" ]; then
-  install -d -m 750 "$DATA_DIR"
-  if [ -d "$ROOT_DIR/data" ] && [ -z "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
-    echo "[install] 迁移旧数据：$ROOT_DIR/data → $DATA_DIR"
-    cp -a "$ROOT_DIR/data/." "$DATA_DIR/"
-  fi
-  if [ -f "$ROOT_DIR/snack-warehouse.toml" ] && [ ! -f "$CONFIG_FILE" ]; then
-    echo "[install] 迁移旧配置：$ROOT_DIR/snack-warehouse.toml → $CONFIG_FILE"
-    install -m 640 "$ROOT_DIR/snack-warehouse.toml" "$CONFIG_FILE"
-  fi
-fi
 
 # 4) 数据目录（升级时确保归属正确；-R 兼容旧版本遗留的 root/其他用户文件）
 install -d -m 750 "$DATA_DIR"

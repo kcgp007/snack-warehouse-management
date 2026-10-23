@@ -136,7 +136,7 @@ sudo ./install.sh --profile release  # 使用 release 后端（仍会先构建�
 
 - **安装目录**：`/opt/snack-warehouse`。`install.sh` 可放在任意位置（例如家目录下的 `dist/`），运行时会把二进制、`static/`、两个脚本与 README 部署到 `/opt/snack-warehouse`；
 - **运行用户**：`snack-warehouse`，不存在时自动创建为无登录 shell 的系统用户；程序归 `root`，服务仅写 `data/`；
-- **从旧版就地安装升级**：若脚本目录存在 `data/` 或 `snack-warehouse.toml`，而 `/opt/snack-warehouse` 下尚不存在，会自动迁移（已存在则绝不覆盖）；
+- **不做数据迁移**：`/opt/snack-warehouse/data` 与配置已存在则原样保留，否则全新初始化；
 - **路径兼容检查**：`noexec` 挂载、危险路径、运行用户无法穿越安装目录等情况会在启动服务前报错；必要时用 `setfacl` 仅授予穿越权限；
 - 升级时递归纠正 `data/` 所有权、配置 `640`、程序与静态资源 `a+rX`；旧 unit 中的 `User=` 会被重写为 `snack-warehouse`。
 
