@@ -6,7 +6,7 @@
 //! - 会话 token ≥32 字节熵。
 
 use chrono::{Local, NaiveDate, TimeDelta, Utc};
-use rand::RngCore;
+use rand::Rng;
 
 /// 当前 UTC 时间，RFC3339 格式。
 pub fn now_rfc3339() -> String {
@@ -58,7 +58,7 @@ pub(crate) fn is_users_path(path: &str) -> bool {
 /// 生成会话 token：32 字节（256 位）随机熵，十六进制编码（64 字符）。
 pub fn new_session_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
