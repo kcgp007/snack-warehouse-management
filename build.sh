@@ -508,6 +508,8 @@ if [ "$PURGE" -eq 1 ]; then
   if [ "$RUN_USER" != "root" ] && getent group "$RUN_USER" >/dev/null 2>&1; then
     groupdel "$RUN_USER" 2>/dev/null || true
   fi
+  # 已清空则顺手删除安装目录本身
+  rmdir "$INSTALL_DIR" 2>/dev/null || true
   echo
   echo "卸载完成 ✅（服务、程序、配置、数据、用户均已删除）"
 else
