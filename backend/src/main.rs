@@ -1,8 +1,9 @@
-//! 服务入口：读取运行目录下的 `snack-warehouse.toml` 配置文件，构建应用并监听端口。
+//! 服务入口：读取**当前工作目录**下的 `snack-warehouse.toml` 配置文件，构建应用并监听端口。
 //!
-//! 配置文件：运行目录下的 `snack-warehouse.toml`（与二进制同级）。
+//! 配置文件：当前工作目录下的 `snack-warehouse.toml`（systemd 下由 WorkingDirectory 决定）。
 //! 配置项：`host`（默认 `0.0.0.0`）、`port`（默认 `3000`）、
-//! `db_path`（默认 `data/app.db`）、`static_dir`（默认 `static`）、
+//! `db_path`（默认相对当前工作目录的 `data/app.db`）、
+//! `static_dir`（默认二进制同目录的 `static/`）、
 //! `admin_username`（默认 `admin`）、`admin_password`（默认 `admin123`）。
 //! 未设置的项使用默认值；不读取任何环境变量或环境变量配置文件。
 //!
@@ -28,12 +29,19 @@ pub struct ServerConfig {
     pub admin_password: Option<String>,
 }
 
-fn load_server_config() -> ServerConfig {
-    let exe_dir = std::env::current_exe()
+/// 二进制所在目录：静态资源默认从这里加载（演示运行与安装目录通用）。
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let config_path = exe_dir.join(CONFIG_FILE);
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
+
+/// 配置固定从当前工作目录读取，使 `run.sh` 的演示数据落在调用者所在目录。
+fn load_server_config() -> ServerConfig {
+    let config_path = std::env::current_dir()
+        .unwrap_or_default()
+        .join(CONFIG_FILE);
 
     match std::fs::read_to_string(&config_path) {
         Ok(content) => toml::from_str(&content).unwrap_or_default(),
@@ -45,12 +53,14 @@ fn load_server_config() -> ServerConfig {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_server_config();
 
-    let db_path = cfg.db_path
+    let db_path = cfg
+        .db_path
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("data/app.db"));
-    let static_dir = cfg.static_dir
+    let static_dir = cfg
+        .static_dir
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("static"));
+        .unwrap_or_else(|| exe_dir().join("static"));
     let host = cfg.host.unwrap_or_else(|| "0.0.0.0".to_owned());
     let port = cfg.port.unwrap_or(3000);
     let admin_username = cfg.admin_username.unwrap_or_else(|| "admin".to_owned());

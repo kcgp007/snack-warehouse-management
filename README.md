@@ -56,8 +56,9 @@ dist/                # 编译产物目录（由 build.sh 生成，不入 git）
 cd dist
 ./run.sh
 
-# 如需部署到任意路径，直接把整个 dist/ 文件夹拷贝过去，再执行 ./run.sh 即可
-# 路径由脚本自动推导，不依赖环境变量设置
+# 演示模式：数据库、证书、配置都保存在“执行 run.sh 时所在的目录”，
+# 与程序目录无关；换一个目录运行就是一套独立数据。
+# dist/ 可整体拷到任意路径，在任意目录执行其中的 run.sh 即可
 ```
 
 浏览器访问 <https://127.0.0.1:3000> 即可使用（首次会提示自签名证书不受信任，选择继续访问即可，见下文「HTTPS 与证书」）。`run.sh` 同时打印局域网地址（如 `https://192.168.x.x:3000`），手机/其他电脑可直接打开。
@@ -90,7 +91,7 @@ admin_password = "admin123"
 | `admin_username` | `admin` | 首次建库时创建的管理员用户名 |
 | `admin_password` | `admin123` | 首次建库时创建的管理员密码（登录后请立即修改） |
 
-`run.sh` 不导出任何环境变量，路径由脚本按 `dist/` 布局自动推导；systemd 安装时生成的配置文件权限为 `640 root:snack-warehouse`（管理员可编辑、服务可读但不可改），修改后执行 `sudo systemctl restart snack-warehouse` 生效。
+`run.sh` 不导出任何环境变量：程序与静态资源取自脚本所在目录，**数据目录为当前工作目录**——`data/app.db`、`data/certs/`、`snack-warehouse.toml` 都落在执行命令时所在的文件夹，与系统安装互不影响。systemd 安装固定部署到 `/opt/snack-warehouse`，由 unit 的 `WorkingDirectory` 决定数据与配置目录；配置文件权限 `640 root:snack-warehouse`（管理员可编辑、服务可读但不可改），修改后执行 `sudo systemctl restart snack-warehouse` 生效。
 
 ### HTTPS 与证书
 
@@ -110,10 +111,10 @@ admin_password = "admin123"
 
 ### 远程无法访问？
 
-1. **确认监听地址**：默认 `HOST=0.0.0.0`（所有网卡）。启动日志应显示 `[server] listening on https://0.0.0.0:3000`；若设了 `HOST=127.0.0.1` 则仅本机可访问。
+1. **确认监听地址**：配置项 `host` 默认 `0.0.0.0`（所有网卡）。启动日志应显示 `[server] listening on https://0.0.0.0:3000`；若设为 `host = "127.0.0.1"` 则仅本机可访问。
 2. **防火墙放行**：放行 TCP 3000（或你自定义的 `port`）。例如 `sudo ufw allow 3000/tcp`（Ubuntu）。
 3. **用局域网 IP 访问**：在服务器上执行 `hostname -I` 取 IP，其他设备浏览器打开 `https://<该IP>:3000`；两端需在同一局域网（或已配置路由/端口转发）。
-4. **容器部署**：需同时映射端口（如 `-p 3000:3000`），`HOST` 保持默认 `0.0.0.0` 即可。
+4. **容器部署**：需同时映射端口（如 `-p 3000:3000`），`host` 保持默认 `0.0.0.0` 即可。
 
 ### 默认账号与安全提示
 
@@ -171,7 +172,7 @@ sudo ./uninstall.sh              # 交互式卸载；询问是否同时删除数
 
 无论选择如何，systemd 服务、unit 文件、程序二进制与静态资源都会被删除；未选择删除的部分会保留，重新安装可直接复用。回答 `y`/`yes`（不区分大小写）视为同意，其他任何输入（含直接回车、EOF）视为取消。
 
-> 整个 `dist/` 文件夹可拷贝到任意服务器路径，进入后执行 `./run.sh` 即可直接运行；如需 systemd 托管，在该目录下执行 `sudo ./install.sh`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行配置中的 `port`（默认 3000/tcp）。
+> 整个 `dist/` 文件夹可拷贝到任意路径做演示：在任意目录执行其中的 `run.sh`，数据就落在该目录；如需 systemd 托管，执行 `sudo ./install.sh`，程序会部署到 `/opt/snack-warehouse`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行配置中的 `port`（默认 3000/tcp）。
 
 ## API 概览
 

@@ -60,18 +60,23 @@ forward() {
 trap 'forward INT' INT
 trap 'forward TERM' TERM
 
-# 配置：运行目录下的 snack-warehouse.toml（与二进制同级），由后端自行读取；
-# 本脚本不再导出环境变量，核心路径由脚本自动推导。
-cd "$ROOT_DIR"
+# 演示模式：不切换工作目录——数据库、证书、配置都放在“调用 run.sh 时所在的目录”，
+# 程序与静态资源仍取自脚本目录，因此与系统安装（/opt）的布局互不影响。
+RUN_DIR="$(pwd -P)"
+# 仅用于打印提示：从当前目录的 TOML 读取 port，缺失或格式异常时回退 3000
+PORT="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$RUN_DIR/snack-warehouse.toml" 2>/dev/null | tail -n 1)"
+PORT="${PORT:-3000}"
 
 echo "[run] 启动后端：$BACKEND_BIN"
-echo "[run] 数据库：$ROOT_DIR/data/app.db（静态资源：$STATIC_DIR）"
-echo "[run] 运行目录：$ROOT_DIR"
-echo "[run] 配置：运行目录下的 snack-warehouse.toml（缺失则使用默认值 host=0.0.0.0 port=3000 admin=admin/admin123）"
+echo "[run] 运行目录（数据落在这里）：$RUN_DIR"
+echo "[run] 数据库：$RUN_DIR/data/app.db"
+echo "[run] 证书：$RUN_DIR/data/certs/"
+echo "[run] 静态资源：$STATIC_DIR"
+echo "[run] 配置：$RUN_DIR/snack-warehouse.toml（缺失则使用默认值 host=0.0.0.0 port=3000 admin=admin/admin123）"
 "$BACKEND_BIN" &
 child=$!
-echo "[run] 访问地址：https://127.0.0.1:3000（本机；自签名证书首次访问需在浏览器手动信任）"
-echo "[run] 局域网访问：请在浏览器中输入 https://<本机IP>:3000（若无法访问请检查防火墙放行 3000/tcp）"
+echo "[run] 访问地址：https://127.0.0.1:$PORT（本机；自签名证书首次访问需在浏览器手动信任）"
+echo "[run] 局域网访问：请在浏览器中输入 https://<本机IP>:$PORT（若无法访问请检查防火墙放行 $PORT/tcp）"
 
 # 4) 等待子进程退出；若 wait 被信号陷阱打断（子进程仍在运行）则继续等待
 set +e
