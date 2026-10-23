@@ -41,7 +41,7 @@ dist/                # 编译产物目录（由 build.sh 生成，不入 git）
 │   ├── static/                   # 前端静态资源
 │   ├── run.sh                    # 一键运行脚本（HTTPS）
 │   ├── install.sh                # 一键安装为 systemd 系统服务（开机自启）
-│   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除配置/数据/用户）
+│   └── uninstall.sh              # 一键卸载系统服务（交互式询问是否删除数据/用户）
 ```
 
 ## 快速开始
@@ -155,10 +155,15 @@ sudoedit /path/to/install/snack-warehouse.toml   # 改端口/初始管理员等�
 
 ```bash
 cd dist                          # 进入安装时所在的目录（即 dist/）
-sudo ./uninstall.sh            # 移除服务与程序，保留配置和数据库
-sudo ./uninstall.sh --purge    # 连同配置、数据库、运行用户一并删除（会二次确认）
-sudo ./uninstall.sh --purge --yes
+sudo ./uninstall.sh            # 交互式卸载；询问是否同时删除数据库/配置、运行用户
 ```
+
+卸载过程不会接受任何“一键全删”参数，而是分两步手动确认（默认均为 N，直接回车即保留）：
+
+1. `是否同时删除数据库与配置？` —— 输入 `y` 才会删除 `data/`（含 `app.db` 与自签证书）和 `snack-warehouse.toml`；
+2. `是否同时删除系统用户与用户组 snack-warehouse？` —— 输入 `y` 才会执行 `userdel`/`groupdel`。
+
+无论选择如何，systemd 服务、unit 文件、程序二进制与静态资源都会被删除；未选择删除的部分会保留，重新安装可直接复用。回答 `y`/`yes`（不区分大小写）视为同意，其他任何输入（含直接回车、EOF）视为取消。
 
 > 整个 `dist/` 文件夹可拷贝到任意服务器路径，进入后执行 `./run.sh` 即可直接运行；如需 systemd 托管，在该目录下执行 `sudo ./install.sh`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行配置中的 `port`（默认 3000/tcp）。
 

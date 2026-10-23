@@ -382,10 +382,11 @@ cat > "$DIST_DIR/uninstall.sh" <<'UNINSTALL_EOF'
 # 一键卸载：移除由 install.sh 安装的 systemd 系统级服务。
 #
 # 用法：
-#   sudo ./uninstall.sh                 # 卸载服务与程序，保留配置和数据库
-#   sudo ./uninstall.sh --purge         # 连同配置、数据库、运行用户一并删除
-#   sudo ./uninstall.sh --purge --yes   # 彻底删除且不再询问
+#   sudo ./uninstall.sh            # 交互式卸载（会询问是否删除数据与运行用户）
 #   sudo ./uninstall.sh --help
+#
+# 卸载始终移除：systemd 服务、unit 文件、程序与静态资源。
+# 数据库/证书（data/）、配置文件与系统用户默认保留，仅在交互提示中输入 y 才会删除。
 #
 # 安装位置（由脚本所在目录确定，不可通过环境变量覆盖）：
 #   程序与静态资源：install.sh所在目录
@@ -405,23 +406,32 @@ CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-PURGE=0
-ASSUME_YES=0
-
 usage() {
   awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
 }
 
+# 交互式确认：仅输入 y/yes（不区分大小写）视为同意，其余（含直接回车、EOF）均为 N
+ask_yes_no() {
+  local prompt="$1" answer=""
+  printf '%s [y/N] ' "$prompt"
+  if ! read -r answer; then
+    echo
+    return 1
+  fi
+  case "${answer,,}" in
+    y|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --purge) PURGE=1 ;;
-    -y|--yes) ASSUME_YES=1 ;;
     -h|--help)
       usage
       exit 0
       ;;
     *)
-      echo "未知参数：$1（使用 --help 查看用法）" >&2
+      echo "未知参数：$1（使用 --help 查看用法；删除数据与用户请在交互提示中输入 y）" >&2
       exit 2
       ;;
   esac
@@ -446,20 +456,22 @@ for path in "$INSTALL_DIR" "$DATA_DIR"; do
   esac
 done
 
-if [ "$PURGE" -eq 1 ] && [ "$ASSUME_YES" -eq 0 ]; then
-  echo "即将彻底删除以下内容："
-  echo "  服务：$SERVICE_NAME.service"
-  echo "  程序：$INSTALL_DIR"
-  echo "  配置：$CONFIG_FILE"
-  echo "  数据：$DATA_DIR（含数据库，不可恢复）"
-  echo "  用户：$RUN_USER"
-  printf '确认请输入 yes：'
-  read -r answer || answer=""
-  if [ "$answer" != "yes" ]; then
-    echo "已取消。"
-    exit 1
+echo "即将卸载以下内容（不可撤销）："
+echo "  服务：$SERVICE_NAME.service"
+echo "  unit：$UNIT_FILE"
+echo "  程序与静态资源：$INSTALL_DIR"
+echo
+DELETE_DATA=0
+DELETE_USER=0
+if ask_yes_no "是否同时删除数据库与配置？$DATA_DIR 与 $CONFIG_FILE（不可恢复）"; then
+  DELETE_DATA=1
+fi
+if [ "$RUN_USER" != "root" ] && id -u "$RUN_USER" >/dev/null 2>&1; then
+  if ask_yes_no "是否同时删除系统用户与用户组 $RUN_USER？"; then
+    DELETE_USER=1
   fi
 fi
+echo
 
 # 1) 停止并移除 systemd 服务
 if command -v systemctl >/dev/null 2>&1; then
@@ -483,42 +495,54 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
 fi
 
-# 2) 删除程序与静态资源（保留 data/ 与 snack-warehouse.toml，便于重装复用）
+# 2) 删除程序与静态资源（data/ 与 snack-warehouse.toml 暂留，按交互结果决定是否删除）
 if [ -d "$INSTALL_DIR" ]; then
-  echo "[uninstall] 删除程序与静态资源：$INSTALL_DIR（保留 data/ 与 snack-warehouse.toml）"
+  echo "[uninstall] 删除程序与静态资源：$INSTALL_DIR"
   find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
     ! -name 'data' ! -name 'snack-warehouse.toml' \
     -exec rm -rf -- {} +
 fi
 
-# 3) 可选：删除配置、数据与运行用户
-if [ "$PURGE" -eq 1 ]; then
+# 3) 按交互选择删除配置与数据
+if [ "$DELETE_DATA" -eq 1 ]; then
   if [ -f "$CONFIG_FILE" ]; then
     echo "[uninstall] 删除配置文件：$CONFIG_FILE"
     rm -f "$CONFIG_FILE"
   fi
   if [ -d "$DATA_DIR" ]; then
-    echo "[uninstall] 删除数据目录：$DATA_DIR（含数据库）"
+    echo "[uninstall] 删除数据目录：$DATA_DIR（含数据库与证书）"
     rm -rf "$DATA_DIR"
   fi
+fi
+
+# 4) 按交互选择删除系统用户与用户组
+if [ "$DELETE_USER" -eq 1 ]; then
   if [ "$RUN_USER" != "root" ] && id -u "$RUN_USER" >/dev/null 2>&1; then
     echo "[uninstall] 删除系统用户：$RUN_USER"
     userdel "$RUN_USER" 2>/dev/null || true
   fi
   if [ "$RUN_USER" != "root" ] && getent group "$RUN_USER" >/dev/null 2>&1; then
+    echo "[uninstall] 删除系统用户组：$RUN_USER"
     groupdel "$RUN_USER" 2>/dev/null || true
   fi
-  # 已清空则顺手删除安装目录本身
-  rmdir "$INSTALL_DIR" 2>/dev/null || true
-  echo
-  echo "卸载完成 ✅（服务、程序、配置、数据、用户均已删除）"
+fi
+
+# 已清空则顺手删除安装目录本身
+rmdir "$INSTALL_DIR" 2>/dev/null || true
+
+echo
+echo "卸载完成 ✅"
+KEEP=()
+if [ "$DELETE_DATA" -eq 0 ]; then
+  [ -f "$CONFIG_FILE" ] && KEEP+=("配置：$CONFIG_FILE")
+  [ -d "$DATA_DIR" ] && KEEP+=("数据：$DATA_DIR")
+fi
+[ "$DELETE_USER" -eq 0 ] && id -u "$RUN_USER" >/dev/null 2>&1 && KEEP+=("用户：$RUN_USER")
+if [ "${#KEEP[@]}" -gt 0 ]; then
+  echo "已保留（重新安装会继续使用）："
+  printf '  %s\n' "${KEEP[@]}"
 else
-  echo
-  echo "卸载完成 ✅"
-  echo "已保留配置与数据（重新安装会继续使用）："
-  echo "  配置：$CONFIG_FILE"
-  echo "  数据：$DATA_DIR"
-  echo "如需彻底删除（含配置、数据库与运行用户），请执行：sudo ./uninstall.sh --purge"
+  echo "配置、数据与运行用户均已删除。"
 fi
 UNINSTALL_EOF
 
