@@ -196,7 +196,7 @@ if command -v findmnt >/dev/null 2>&1; then
   esac
 fi
 
-# 运行用户：已存在则直接使用（普通账户永不由卸载删除）；不存在则询问是否创建系统用户
+# 运行用户：已存在则直接使用；不存在则自动创建系统用户
 if id -u "$RUN_USER" >/dev/null 2>&1; then
   RUN_GROUP="$(id -gn "$RUN_USER")"
   echo "[install] 使用现有运行用户：$RUN_USER（组 $RUN_GROUP）"
