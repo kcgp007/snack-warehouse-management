@@ -97,13 +97,12 @@ cat > "$DIST_DIR/install.sh" <<'INSTALL_EOF'
 #   sudo ./install.sh --profile release    # 使用 release 版本后端二进制
 #   sudo ./install.sh --help
 #
-# 安装位置：install.sh 所在目录（自动解析符号链接）
+# 安装位置：/opt/snack-warehouse（推荐布局：程序归 root，服务只写 data/）
 # 运行用户：snack-warehouse（不存在时创建为无登录 shell 的系统用户）
-#   - data/ 与 snack-warehouse.toml 始终位于安装目录内
-#   - 兼容 /opt、/srv、/usr/local、/home 等不同安装位置：
-#       * 目录或祖先缺少穿越权限时，用 ACL 仅授予 x（不可列出/读取其他文件）
-#       * 无 ACL 工具、noexec 挂载、危险路径等情况会提前检测并给出明确指引
-#       * 升级时自动纠正遗留的程序/数据/配置所有权与权限
+#   - 脚本可放在任意位置（如家目录的 dist/），运行时会把产物部署到 /opt
+#   - 若脚本目录内已有 data/ 或 snack-warehouse.toml（旧版就地安装），会自动迁移
+#   - data/ 与配置位于安装目录内；程序/静态资源 a+rX，data 归运行用户
+#   - 仍保留路径兼容检查（noexec、危险路径、穿越权限），异常时提前报错
 # 不使用任何环境变量。
 set -euo pipefail
 
@@ -164,8 +163,8 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
-# ---------- 部署参数：目录 = 脚本所在目录；用户 = snack-warehouse ----------
-INSTALL_DIR="$ROOT_DIR"
+# ---------- 部署参数：目录 = /opt/snack-warehouse；用户 = snack-warehouse ----------
+INSTALL_DIR="/opt/snack-warehouse"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 RUN_USER=snack-warehouse
@@ -274,19 +273,45 @@ if [ "$MANAGE_USER" -eq 1 ] && ! getent group "$RUN_GROUP" >/dev/null 2>&1; then
   usermod -aG "$RUN_GROUP" "$RUN_USER"
 fi
 
-# 2) 升级时先停旧服务
+# 2) 升级时先停旧服务（含旧版本就地安装的实例）
 if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
   echo "[install] 停止正在运行的 $SERVICE_NAME.service …"
   systemctl stop "$SERVICE_NAME"
 fi
 
-# 3) 安装程序与静态资源（就地安装，可重复执行）
-# INSTALL_DIR 已固定为脚本所在目录，产物由 build.sh 生成，无需自复制。
+# 3) 安装程序与静态资源到 /opt（可重复执行，整体替换）
+install -d -m 755 "$INSTALL_DIR"
+if [ "$ROOT_DIR" != "$INSTALL_DIR" ]; then
+  echo "[install] 部署产物：$ROOT_DIR → $INSTALL_DIR"
+  install -m 755 "$BIN_SRC" "$INSTALL_DIR/snack-warehouse-backend"
+  rm -rf "$INSTALL_DIR/static"
+  install -d -m 755 "$INSTALL_DIR/static"
+  cp -a "$STATIC_SRC/." "$INSTALL_DIR/static/"
+  for f in install.sh uninstall.sh; do
+    if [ -f "$ROOT_DIR/$f" ]; then
+      install -m 755 "$ROOT_DIR/$f" "$INSTALL_DIR/$f"
+    fi
+  done
+  if [ -f "$ROOT_DIR/README.md" ]; then
+    install -m 644 "$ROOT_DIR/README.md" "$INSTALL_DIR/README.md"
+  fi
+fi
 chmod 755 "$INSTALL_DIR"
-chmod 755 "$BIN_SRC"
-chmod -R a+rX "$STATIC_SRC"
-if [ -f "$ROOT_DIR/README.md" ]; then
-  chmod 644 "$ROOT_DIR/README.md"
+chmod 755 "$INSTALL_DIR/snack-warehouse-backend"
+chmod -R a+rX "$INSTALL_DIR/static"
+[ -f "$INSTALL_DIR/README.md" ] && chmod 644 "$INSTALL_DIR/README.md"
+
+# 旧版就地安装的数据库/配置自动迁移（仅当目标缺失时，避免覆盖现有数据）
+if [ "$ROOT_DIR" != "$INSTALL_DIR" ]; then
+  install -d -m 750 "$DATA_DIR"
+  if [ -d "$ROOT_DIR/data" ] && [ -z "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+    echo "[install] 迁移旧数据：$ROOT_DIR/data → $DATA_DIR"
+    cp -a "$ROOT_DIR/data/." "$DATA_DIR/"
+  fi
+  if [ -f "$ROOT_DIR/snack-warehouse.toml" ] && [ ! -f "$CONFIG_FILE" ]; then
+    echo "[install] 迁移旧配置：$ROOT_DIR/snack-warehouse.toml → $CONFIG_FILE"
+    install -m 640 "$ROOT_DIR/snack-warehouse.toml" "$CONFIG_FILE"
+  fi
 fi
 
 # 4) 数据目录（升级时确保归属正确；-R 兼容旧版本遗留的 root/其他用户文件）
@@ -469,8 +494,8 @@ cat > "$DIST_DIR/uninstall.sh" <<'UNINSTALL_EOF'
 # 卸载始终移除：systemd 服务、unit 文件、程序与静态资源。
 # 数据库/证书（data/）、配置文件与系统用户默认保留，仅在交互提示中输入 y 才会删除。
 #
-# 安装位置与运行用户：从已安装的 unit 读取（不预判），
-# unit 不存在时回退到脚本所在目录。
+# 安装位置与运行用户：从已安装的 unit 读取；
+# unit 不存在时回退到推荐布局 /opt/snack-warehouse。
 #   WorkingDirectory → 程序目录（data/ 与 snack-warehouse.toml 位于其下）
 #   User / Group     → 实际运行用户
 set -euo pipefail
@@ -483,7 +508,7 @@ UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 INSTALLED_USER="$(awk -F= '/^[[:space:]]*User=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$UNIT_FILE" 2>/dev/null || true)"
 INSTALLED_GROUP="$(awk -F= '/^[[:space:]]*Group=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$UNIT_FILE" 2>/dev/null || true)"
 INSTALLED_DIR="$(awk -F= '/^[[:space:]]*WorkingDirectory=/{sub(/^[[:space:]]*WorkingDirectory=/, ""); print; exit}' "$UNIT_FILE" 2>/dev/null || true)"
-INSTALL_DIR="${INSTALLED_DIR:-$ROOT_DIR}"
+INSTALL_DIR="${INSTALLED_DIR:-/opt/snack-warehouse}"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 RUN_USER="${INSTALLED_USER:-snack-warehouse}"

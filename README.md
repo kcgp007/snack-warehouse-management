@@ -134,14 +134,11 @@ sudo ./install.sh --profile release  # 使用 release 后端（仍会先构建�
 
 安装位置与运行用户是固定的，不需要也不允许通过参数或环境变量指定：
 
-- **安装目录**：始终是 `install.sh` 所在目录（用 `pwd -P` 解析符号链接，`data/` 与 `snack-warehouse.toml` 都在其下）；
-- **运行用户**：始终是 `snack-warehouse`；不存在时自动创建为无登录 shell 的系统用户；
-- **兼容不同安装位置**（`/opt`、`/srv`、`/usr/local`、家目录等）：
-  - 目录或祖先缺少穿越权限时，用 `setfacl` 只添加 `x`（可通过，但不可列出或读取其他文件），不改变原访问控制；
-  - 系统缺少 `setfacl` 或文件系统不支持 ACL 时，直接给出三种可选处理方式并退出；
-  - 检测 `noexec` 挂载并提前报错；拒绝 `/`、`/home` 等危险路径；
-  - 升级时递归纠正 `data/` 所有权（兼容旧版本 root 或其他用户创建的文件）、配置 `640`、程序与静态资源 `a+rX`；
-  - 旧 unit 中的 `User=` 会被重写为 `snack-warehouse`。
+- **安装目录**：`/opt/snack-warehouse`。`install.sh` 可放在任意位置（例如家目录下的 `dist/`），运行时会把二进制、`static/`、两个脚本与 README 部署到 `/opt/snack-warehouse`；
+- **运行用户**：`snack-warehouse`，不存在时自动创建为无登录 shell 的系统用户；程序归 `root`，服务仅写 `data/`；
+- **从旧版就地安装升级**：若脚本目录存在 `data/` 或 `snack-warehouse.toml`，而 `/opt/snack-warehouse` 下尚不存在，会自动迁移（已存在则绝不覆盖）；
+- **路径兼容检查**：`noexec` 挂载、危险路径、运行用户无法穿越安装目录等情况会在启动服务前报错；必要时用 `setfacl` 仅授予穿越权限；
+- 升级时递归纠正 `data/` 所有权、配置 `640`、程序与静态资源 `a+rX`；旧 unit 中的 `User=` 会被重写为 `snack-warehouse`。
 
 其余行为：
 
@@ -163,7 +160,7 @@ sudoedit /path/to/install/snack-warehouse.toml   # 改端口/初始管理员等�
 卸载：
 
 ```bash
-cd <安装目录>                    # 即 install.sh 所在目录（unit 中也可查到）
+cd /opt/snack-warehouse          # 安装目录（unit 的 WorkingDirectory 中也可查到）
 sudo ./uninstall.sh              # 交互式卸载；询问是否同时删除数据库/配置、运行用户
 ```
 
