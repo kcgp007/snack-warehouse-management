@@ -126,21 +126,27 @@ admin_password = "admin123"
 Linux + systemd 环境可把应用安装为系统级守护进程（开机自启、崩溃自动重启），需要 root：
 
 ```bash
-cd dist                          # 进入编译产物目录
-sudo ./install.sh                # 编译 + 安装/升级（就地安装，以 install.sh 所在目录为运行目录）
-sudo ./install.sh --no-build     # 使用现有编译产物
-sudo PROFILE=release ./install.sh # 使用 release 后端（仍会先构建前端）
+cd dist                              # 进入编译产物目录
+sudo ./install.sh                    # 交互式安装/升级：逐项询问安装目录与运行用户
+sudo ./install.sh --no-build         # 使用现有编译产物
+sudo ./install.sh --defaults         # 不询问，使用默认值（自动化）
+sudo ./install.sh --install-dir /opt/snack-warehouse --run-user snack
+sudo ./install.sh --profile release  # 使用 release 后端（仍会先构建前端）
 ```
 
-安装脚本会：
+安装脚本**不预判安装目录与运行用户**（部署时二者都是变量），而是逐项询问并校验，直接回车采用方括号中的默认值：
+
+- **安装目录**：默认脚本所在目录；可填任意可写路径（如 `/opt/snack-warehouse`），脚本会把二进制、`static/`、`data/`、配置与两个脚本一并放到该目录；
+- **运行用户**：默认执行 `sudo` 的账户；可填已有用户（推荐普通账户或专用系统账户）。若用户不存在，会询问是否创建为无登录 shell 的系统用户（默认 N，不创建则退出）；
+- 安装前会**以该用户实际测试能否进入安装目录**，避免家目录权限不足导致 systemd `200/CHDIR`；不满足时直接报错并给出修复建议。
+
+其余行为：
 
 - 以仓库所有者身份执行 `./build.sh`（避免在 `target/` 下留下 root 所有的文件）；
-- 创建无登录 shell 的系统用户 `snack-warehouse`；
-- **默认就地安装**：程序与静态资源放在 `install.sh` 所在目录（即 `dist/`），数据库放在其下的 `data/` 子目录；
-- 路径由脚本自动推导，**不通过环境变量设置核心路径**（`INSTALL_DIR`/`DATA_DIR`/`SNACK_DB_PATH`/`STATIC_DIR` 等环境变量不再生效）；
-- 首次安装生成 `<安装目录>/snack-warehouse.toml`（TOML 格式，`root:snack-warehouse` 权限 `640`），升级时保留已有配置并自动纠正权限；
-- 写入 `/etc/systemd/system/snack-warehouse.service`（`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写），设为开机自启并启动；
-- 通过 `curl -k` 做启动健康检查（自签名证书）。
+- 首次安装生成 `<安装目录>/snack-warehouse.toml`（TOML，`root:<运行用户组>` 权限 `640`），升级时保留已有配置并自动纠正权限；
+- 写入 `/etc/systemd/system/snack-warehouse.service`：`User`/`Group` 为所选运行用户，`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写；安装在 `/home` 下时自动改用 `ProtectHome=read-only`；
+- 设为开机自启并启动，通过 `curl -k` 做启动健康检查（自签名证书）；
+- **全部参数都不使用环境变量**：配置只来自交互输入、命令行参数或运行目录下的 TOML。
 
 常用运维命令：
 
@@ -154,14 +160,14 @@ sudoedit /path/to/install/snack-warehouse.toml   # 改端口/初始管理员等�
 卸载：
 
 ```bash
-cd dist                          # 进入安装时所在的目录（即 dist/）
-sudo ./uninstall.sh            # 交互式卸载；询问是否同时删除数据库/配置、运行用户
+cd <安装目录>                    # 即 install.sh 所在目录（unit 中也可查到）
+sudo ./uninstall.sh              # 交互式卸载；询问是否同时删除数据库/配置、运行用户
 ```
 
-卸载过程不会接受任何“一键全删”参数，而是分两步手动确认（默认均为 N，直接回车即保留）：
+卸载脚本会从 unit 的 `WorkingDirectory=` / `User=` / `Group=` 读取**实际安装目录与运行用户**（unit 不存在时回退到脚本所在目录），不做预判。过程不接受“一键全删”参数，而是分步手动确认（默认均为 N，直接回车即保留）：
 
 1. `是否同时删除数据库与配置？` —— 输入 `y` 才会删除 `data/`（含 `app.db` 与自签证书）和 `snack-warehouse.toml`；
-2. `是否同时删除系统用户与用户组 snack-warehouse？` —— 输入 `y` 才会执行 `userdel`/`groupdel`。
+2. `是否同时删除系统用户与用户组 <运行用户>？` —— 仅当该用户是系统账户（uid < 1000）才会询问，输入 `y` 才执行 `userdel`/`groupdel`；普通账户（如 `king`）**永不删除**，只提示保留。
 
 无论选择如何，systemd 服务、unit 文件、程序二进制与静态资源都会被删除；未选择删除的部分会保留，重新安装可直接复用。回答 `y`/`yes`（不区分大小写）视为同意，其他任何输入（含直接回车、EOF）视为取消。
 

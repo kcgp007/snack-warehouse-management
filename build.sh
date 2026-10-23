@@ -92,50 +92,39 @@ cat > "$DIST_DIR/install.sh" <<'INSTALL_EOF'
 # 一键安装：把零食仓库管理平台安装为 systemd 系统级守护进程。
 #
 # 用法：
-#   sudo ./install.sh                 # 编译 + 安装/升级，开机自启
-#   sudo ./install.sh --no-build      # 使用现有编译产物（不重新构建）
-#   sudo ./install.sh --profile release   # 使用 release 版本后端二进制
+#   sudo ./install.sh                      # 编译 + 交互式安装/升级，开机自启
+#   sudo ./install.sh --no-build           # 使用现有编译产物（不重新构建）
+#   sudo ./install.sh --profile release    # 使用 release 版本后端二进制
+#   sudo ./install.sh --defaults           # 不询问，全部使用默认值（自动化用）
+#   sudo ./install.sh --install-dir PATH   # 指定安装目录
+#   sudo ./install.sh --run-user USER      # 指定运行服务的用户
 #   sudo ./install.sh --help
 #
-# 安装位置（由脚本所在目录确定，不可通过环境变量覆盖）：
-#   程序与静态资源：install.sh所在目录
-#   数据库目录：install.sh所在目录下的 data/
-#   配置文件：install.sh所在目录下的 snack-warehouse.toml
-#   SERVICE_NAME=snack-warehouse           systemd 服务名
-#   RUN_USER=snack-warehouse               运行服务的系统用户
+# 安装目录与运行用户不会被预判：默认值只是建议，安装时会逐项询问并校验
+#   - 安装目录默认：脚本所在目录
+#   - 运行用户默认：执行 sudo 的用户；不存在时可选择创建为系统用户
+#   - data/ 与 snack-warehouse.toml 始终位于安装目录内
+#   - 安装前会以该用户实际测试能否进入安装目录（避免 systemd 200/CHDIR）
+# 全部参数均不使用环境变量。
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SERVICE_NAME=snack-warehouse
-INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变量覆盖
-DATA_DIR="$ROOT_DIR/data"
-# 配置文件：运行目录下的 snack-warehouse.toml（非 /etc 目录下的环境变量文件）
-CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-
-# 服务运行用户：
-#   - 安装在 /home 下时，家目录通常不允许其他用户穿越（会报 200/CHDIR Permission denied），
-#     因此直接以安装目录的所有者身份运行（不创建、也不删除该用户）。
-#   - 其他位置使用专用系统用户 snack-warehouse。
-if [[ "$INSTALL_DIR" == /home/* ]]; then
-  INSTALL_OWNER="$(stat -c '%U' "$INSTALL_DIR")"
-  if [ "$INSTALL_OWNER" = "root" ] || [ "$INSTALL_OWNER" = "UNKNOWN" ]; then
-    echo "错误：$INSTALL_DIR 属于 root，无法以非 root 身份运行。" >&2
-    echo "       请先 chown 给普通用户，或把整个 dist/ 安装到 /opt 等目录后重试。" >&2
-    exit 1
-  fi
-  RUN_USER="$INSTALL_OWNER"
-  RUN_GROUP="$(id -gn "$RUN_USER")"
-  MANAGE_USER=0
-else
-  RUN_USER=snack-warehouse
-  RUN_GROUP=snack-warehouse
-  MANAGE_USER=1
-fi
 PROFILE=debug
 
 SKIP_BUILD=0
+ASSUME_DEFAULTS=0
+
+# 部署参数：不预判安装目录与运行用户（实际部署时二者都不确定），
+# 安装时交互式询问；非交互环境或 --defaults 时使用默认值。不读取任何环境变量。
+INSTALL_DIR=""
+DATA_DIR=""
+CONFIG_FILE=""
+RUN_USER=""
+RUN_GROUP=""
+MANAGE_USER=0
 
 usage() {
   awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
@@ -144,6 +133,17 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-build) SKIP_BUILD=1 ;;
+    --defaults) ASSUME_DEFAULTS=1 ;;
+    --install-dir)
+      shift
+      INSTALL_DIR="${1:-}"
+      ;;
+    --install-dir=*) INSTALL_DIR="${1#*=}" ;;
+    --run-user)
+      shift
+      RUN_USER="${1:-}"
+      ;;
+    --run-user=*) RUN_USER="${1#*=}" ;;
     --profile)
       shift
       PROFILE="${1:-}"
@@ -170,26 +170,6 @@ if ! [[ "$SERVICE_NAME" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
   echo "错误：SERVICE_NAME 只能包含字母、数字、._@-：$SERVICE_NAME" >&2
   exit 1
 fi
-if ! [[ "$RUN_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-  echo "错误：RUN_USER 不是合法的系统用户名：$RUN_USER" >&2
-  exit 1
-fi
-if [ "$RUN_USER" = "root" ]; then
-  echo "错误：拒绝以 root 用户运行服务，请使用专用系统用户（默认 snack-warehouse）。" >&2
-  exit 1
-fi
-for path in "$INSTALL_DIR" "$DATA_DIR"; do
-  case "$path" in
-    /|/opt|/var|/var/lib|/usr|/etc|/home|/root|"")
-      echo "错误：拒绝使用危险路径：$path" >&2
-      exit 1
-      ;;
-    *[[:space:]\'\"%]*)
-      echo "错误：路径不能包含空白、引号或 %（systemd 不支持）：$path" >&2
-      exit 1
-      ;;
-  esac
-done
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "错误：安装系统级服务需要 root 权限，请使用：sudo ./install.sh" >&2
@@ -205,6 +185,87 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "错误：找不到 systemctl，无法安装系统服务。" >&2
   exit 1
 fi
+
+# ---------- 采集部署参数（交互式；不预判目录与用户） ----------
+ask() { # $1=提示 $2=默认值
+  local reply=""
+  if [ "$ASSUME_DEFAULTS" -eq 1 ] || [ ! -r /dev/tty ]; then
+    printf '%s' "$2"
+    return 0
+  fi
+  read -r -p "$1 [$2]: " reply </dev/tty || reply=""
+  printf '%s' "${reply:-$2}"
+}
+
+if [ -z "$INSTALL_DIR" ]; then
+  INSTALL_DIR="$(ask "安装目录（程序、静态资源、data/ 与配置都放在这里）" "$ROOT_DIR")"
+fi
+INSTALL_DIR="${INSTALL_DIR%/}"
+case "$INSTALL_DIR" in
+  /*) ;;
+  *)
+    if ! INSTALL_DIR="$(cd "$INSTALL_DIR" 2>/dev/null && pwd)"; then
+      echo "错误：安装目录不存在或无法解析：$INSTALL_DIR" >&2
+      exit 1
+    fi
+    ;;
+esac
+DATA_DIR="$INSTALL_DIR/data"
+CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
+
+DEFAULT_USER="${SUDO_USER:-}"
+if [ -z "$DEFAULT_USER" ] || [ "$DEFAULT_USER" = "root" ]; then
+  # 没有 sudo 上下文时，退回到脚本目录的所有者
+  DEFAULT_USER="$(stat -c '%U' "$ROOT_DIR" 2>/dev/null || true)"
+fi
+if [ -z "$DEFAULT_USER" ] || [ "$DEFAULT_USER" = "root" ] || [ "$DEFAULT_USER" = "UNKNOWN" ]; then
+  DEFAULT_USER="snack-warehouse"
+fi
+if [ -z "$RUN_USER" ]; then
+  RUN_USER="$(ask "运行服务的用户（需对安装目录有执行权限，数据目录将归属该用户）" "$DEFAULT_USER")"
+fi
+
+if ! [[ "$RUN_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+  echo "错误：运行用户不是合法的用户名：$RUN_USER" >&2
+  exit 1
+fi
+if [ "$RUN_USER" = "root" ]; then
+  echo "错误：拒绝以 root 运行服务，请指定普通用户或专用系统用户。" >&2
+  exit 1
+fi
+for path in "$INSTALL_DIR" "$DATA_DIR"; do
+  case "$path" in
+    /|/opt|/var|/var/lib|/usr|/etc|/home|/root|"")
+      echo "错误：拒绝使用危险路径：$path" >&2
+      exit 1
+      ;;
+    *[[:space:]\'\"%]*)
+      echo "错误：路径不能包含空白、引号或 %（systemd 不支持）：$path" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# 运行用户：已存在则直接使用（普通账户永不由卸载删除）；不存在则询问是否创建系统用户
+if id -u "$RUN_USER" >/dev/null 2>&1; then
+  RUN_GROUP="$(id -gn "$RUN_USER")"
+  MANAGE_USER=0
+  echo "[install] 使用现有运行用户：$RUN_USER（组 $RUN_GROUP）"
+else
+  CREATE_USER="$(ask "用户 $RUN_USER 不存在，是否创建为系统用户？(y/N)" "N")"
+  case "$CREATE_USER" in
+    y|Y|yes|YES) ;;
+    *)
+      echo "错误：运行用户不存在：$RUN_USER（未创建）。请先创建用户或改用已有账户。" >&2
+      exit 1
+      ;;
+  esac
+  RUN_GROUP="$RUN_USER"
+  MANAGE_USER=1
+fi
+
+echo "[install] 安装目录：$INSTALL_DIR"
+echo "[install] 运行用户：$RUN_USER（组 $RUN_GROUP）"
 
 # 构建要以仓库所有者的身份执行，避免在 target/ 下留下 root 所有的文件。
 # 使用登录 shell，确保 rustup/nvm 等用户级工具链在 PATH 中。
@@ -260,25 +321,16 @@ if [ ! -f "$STATIC_SRC/index.html" ]; then
   exit 1
 fi
 
-# 1) 服务运行用户
-if [ "$MANAGE_USER" -eq 1 ]; then
-  # 专用系统用户：无登录 shell，仅用于运行服务
-  if ! id -u "$RUN_USER" >/dev/null 2>&1; then
-    NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
-    echo "[install] 创建系统用户：$RUN_USER"
-    useradd --system --home-dir "$DATA_DIR" --shell "$NOLOGIN" "$RUN_USER"
-  fi
-  if ! getent group "$RUN_GROUP" >/dev/null 2>&1; then
-    echo "[install] 创建同名用户组：$RUN_GROUP"
-    groupadd --system "$RUN_GROUP"
-    usermod -aG "$RUN_GROUP" "$RUN_USER"
-  fi
-else
-  echo "[install] 安装目录位于家目录下：以目录所有者 $RUN_USER（组 $RUN_GROUP）身份运行"
-  if id -u snack-warehouse >/dev/null 2>&1; then
-    echo "[install] 提示：检测到旧安装创建的 snack-warehouse 系统用户，本次安装不再使用。"
-    echo "          确认无用后可执行：sudo userdel snack-warehouse"
-  fi
+# 1) 创建系统用户（仅当用户不存在且安装时已确认创建）
+if [ "$MANAGE_USER" -eq 1 ] && ! id -u "$RUN_USER" >/dev/null 2>&1; then
+  NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
+  echo "[install] 创建系统用户：$RUN_USER"
+  useradd --system --home-dir "$DATA_DIR" --shell "$NOLOGIN" "$RUN_USER"
+fi
+if [ "$MANAGE_USER" -eq 1 ] && ! getent group "$RUN_GROUP" >/dev/null 2>&1; then
+  echo "[install] 创建同名用户组：$RUN_GROUP"
+  groupadd --system "$RUN_GROUP"
+  usermod -aG "$RUN_GROUP" "$RUN_USER"
 fi
 
 # 2) 升级时先停旧服务
@@ -289,7 +341,11 @@ fi
 
 # 3) 安装程序与静态资源（可重复执行，静态资源整体替换）
 # 就地运行（INSTALL_DIR == 脚本所在目录）时跳过自复制，避免 rm -rf 误删源文件
-if [ "$(cd "$INSTALL_DIR" && pwd)" = "$(cd "$ROOT_DIR" && pwd)" ]; then
+IN_PLACE=0
+if [ -d "$INSTALL_DIR" ] && [ "$(cd "$INSTALL_DIR" && pwd)" = "$(cd "$ROOT_DIR" && pwd)" ]; then
+  IN_PLACE=1
+fi
+if [ "$IN_PLACE" -eq 1 ]; then
   echo "[install] 就地运行：$INSTALL_DIR（产物已就位，跳过自复制）"
 else
   install -d -m 755 "$INSTALL_DIR"
@@ -301,6 +357,27 @@ else
   if [ -f "$ROOT_DIR/README.md" ]; then
     install -m 644 "$ROOT_DIR/README.md" "$INSTALL_DIR/README.md"
   fi
+  for f in install.sh uninstall.sh; do
+    if [ -f "$ROOT_DIR/$f" ]; then
+      install -m 755 "$ROOT_DIR/$f" "$INSTALL_DIR/$f"
+    fi
+  done
+fi
+
+# 运行用户必须能进入安装目录（父目录缺少 x 权限会导致 systemd 200/CHDIR）
+as_user() {
+  local u="$1"; shift
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$u" -- "$@"
+  else
+    sudo -u "$u" -- "$@"
+  fi
+}
+if ! as_user "$RUN_USER" test -x "$INSTALL_DIR"; then
+  echo "错误：运行用户 $RUN_USER 无法进入安装目录 $INSTALL_DIR。" >&2
+  echo "       请为路径上的父目录增加执行权限（如 chmod o+x /home/xxx），" >&2
+  echo "       或把安装目录改到该用户可访问的位置（如 /opt/snack-warehouse）。" >&2
+  exit 1
 fi
 
 # 4) 数据目录（升级时确保归属正确）
@@ -441,25 +518,23 @@ cat > "$DIST_DIR/uninstall.sh" <<'UNINSTALL_EOF'
 # 卸载始终移除：systemd 服务、unit 文件、程序与静态资源。
 # 数据库/证书（data/）、配置文件与系统用户默认保留，仅在交互提示中输入 y 才会删除。
 #
-# 安装位置（由脚本所在目录确定，不可通过环境变量覆盖）：
-#   程序与静态资源：install.sh所在目录
-#   数据库目录：install.sh所在目录下的 data/
-#   配置文件：install.sh所在目录下的 snack-warehouse.toml
-#   SERVICE_NAME=snack-warehouse           systemd 服务名
-#   RUN_USER=snack-warehouse               运行服务的系统用户
+# 安装位置与运行用户：从已安装的 unit 读取（不预判），
+# unit 不存在时回退到脚本所在目录。
+#   WorkingDirectory → 程序目录（data/ 与 snack-warehouse.toml 位于其下）
+#   User / Group     → 实际运行用户
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SERVICE_NAME=snack-warehouse
-INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变量覆盖
-DATA_DIR="$ROOT_DIR/data"
-# 配置文件：运行目录下的 snack-warehouse.toml（非 /etc 目录下的环境变量文件）
-CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 # 从已安装的 unit 读取实际运行用户（安装在家目录时是普通用户，卸载绝不能删除该账户）
 INSTALLED_USER="$(awk -F= '/^[[:space:]]*User=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$UNIT_FILE" 2>/dev/null || true)"
 INSTALLED_GROUP="$(awk -F= '/^[[:space:]]*Group=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$UNIT_FILE" 2>/dev/null || true)"
+INSTALLED_DIR="$(awk -F= '/^[[:space:]]*WorkingDirectory=/{sub(/^[[:space:]]*WorkingDirectory=/, ""); print; exit}' "$UNIT_FILE" 2>/dev/null || true)"
+INSTALL_DIR="${INSTALLED_DIR:-$ROOT_DIR}"
+DATA_DIR="$INSTALL_DIR/data"
+CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
 RUN_USER="${INSTALLED_USER:-snack-warehouse}"
 RUN_GROUP="${INSTALLED_GROUP:-$RUN_USER}"
 
@@ -523,7 +598,6 @@ DELETE_USER=0
 if ask_yes_no "是否同时删除数据库与配置？$DATA_DIR 与 $CONFIG_FILE（不可恢复）"; then
   DELETE_DATA=1
 fi
-DELETE_USER=0
 if [ "$RUN_USER" != "root" ] && id -u "$RUN_USER" >/dev/null 2>&1; then
   if [ "$(id -u "$RUN_USER")" -lt 1000 ]; then
     if ask_yes_no "是否同时删除系统用户与用户组 $RUN_USER？"; then
