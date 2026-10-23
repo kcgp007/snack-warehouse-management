@@ -112,8 +112,27 @@ INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变�
 DATA_DIR="$ROOT_DIR/data"
 # 配置文件：运行目录下的 snack-warehouse.toml（非 /etc 目录下的环境变量文件）
 CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
-RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+# 服务运行用户：
+#   - 安装在 /home 下时，家目录通常不允许其他用户穿越（会报 200/CHDIR Permission denied），
+#     因此直接以安装目录的所有者身份运行（不创建、也不删除该用户）。
+#   - 其他位置使用专用系统用户 snack-warehouse。
+if [[ "$INSTALL_DIR" == /home/* ]]; then
+  INSTALL_OWNER="$(stat -c '%U' "$INSTALL_DIR")"
+  if [ "$INSTALL_OWNER" = "root" ] || [ "$INSTALL_OWNER" = "UNKNOWN" ]; then
+    echo "错误：$INSTALL_DIR 属于 root，无法以非 root 身份运行。" >&2
+    echo "       请先 chown 给普通用户，或把整个 dist/ 安装到 /opt 等目录后重试。" >&2
+    exit 1
+  fi
+  RUN_USER="$INSTALL_OWNER"
+  RUN_GROUP="$(id -gn "$RUN_USER")"
+  MANAGE_USER=0
+else
+  RUN_USER=snack-warehouse
+  RUN_GROUP=snack-warehouse
+  MANAGE_USER=1
+fi
 PROFILE=debug
 
 SKIP_BUILD=0
@@ -241,16 +260,25 @@ if [ ! -f "$STATIC_SRC/index.html" ]; then
   exit 1
 fi
 
-# 1) 服务运行用户（系统用户，无登录 shell）
-if ! id -u "$RUN_USER" >/dev/null 2>&1; then
-  NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
-  echo "[install] 创建系统用户：$RUN_USER"
-  useradd --system --home-dir "$DATA_DIR" --shell "$NOLOGIN" "$RUN_USER"
-fi
-if ! getent group "$RUN_USER" >/dev/null 2>&1; then
-  echo "[install] 创建同名用户组：$RUN_USER"
-  groupadd --system "$RUN_USER"
-  usermod -aG "$RUN_USER" "$RUN_USER"
+# 1) 服务运行用户
+if [ "$MANAGE_USER" -eq 1 ]; then
+  # 专用系统用户：无登录 shell，仅用于运行服务
+  if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+    NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
+    echo "[install] 创建系统用户：$RUN_USER"
+    useradd --system --home-dir "$DATA_DIR" --shell "$NOLOGIN" "$RUN_USER"
+  fi
+  if ! getent group "$RUN_GROUP" >/dev/null 2>&1; then
+    echo "[install] 创建同名用户组：$RUN_GROUP"
+    groupadd --system "$RUN_GROUP"
+    usermod -aG "$RUN_GROUP" "$RUN_USER"
+  fi
+else
+  echo "[install] 安装目录位于家目录下：以目录所有者 $RUN_USER（组 $RUN_GROUP）身份运行"
+  if id -u snack-warehouse >/dev/null 2>&1; then
+    echo "[install] 提示：检测到旧安装创建的 snack-warehouse 系统用户，本次安装不再使用。"
+    echo "          确认无用后可执行：sudo userdel snack-warehouse"
+  fi
 fi
 
 # 2) 升级时先停旧服务
@@ -277,7 +305,7 @@ fi
 
 # 4) 数据目录（升级时确保归属正确）
 install -d -m 750 "$DATA_DIR"
-chown "$RUN_USER:$RUN_USER" "$DATA_DIR"
+chown "$RUN_USER:$RUN_GROUP" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
 # 5) 配置文件（TOML，运行目录下）：首次安装生成，升级时保留用户修改
@@ -295,7 +323,7 @@ else
   echo "[install] 保留已有配置文件：$CONFIG_FILE（TOML 格式，运行目录下）"
 fi
 # 无论新建还是升级：root 可写、服务组只读，避免服务读不到配置
-chown root:"$RUN_USER" "$CONFIG_FILE"
+chown root:"$RUN_GROUP" "$CONFIG_FILE"
 chmod 640 "$CONFIG_FILE"
 
 # 6) systemd unit
@@ -317,7 +345,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$RUN_USER
-Group=$RUN_USER
+Group=$RUN_GROUP
 WorkingDirectory=$INSTALL_DIR
 # 配置由运行目录下的 TOML 文件读取，不再使用 EnvironmentFile
 # （后端 main.rs 从运行目录的 snack-warehouse.toml 读取配置）
@@ -382,7 +410,7 @@ if command -v curl >/dev/null 2>&1; then
     echo >&2
     echo "排查提示：" >&2
     echo "  - 端口被占用：ss -ltnp | grep :${PORT}" >&2
-    echo "  - 配置无法读取：ls -l $CONFIG_FILE（应为 root:$RUN_USER 640）" >&2
+    echo "  - 配置无法读取：ls -l $CONFIG_FILE（应为 root:$RUN_GROUP 640）" >&2
     echo "  - 手动前台运行：cd $INSTALL_DIR && sudo -u $RUN_USER ./snack-warehouse-backend" >&2
     exit 1
   fi
@@ -393,7 +421,7 @@ echo "安装完成 ✅"
 echo "  服务：$SERVICE_NAME.service（已设为开机自启）"
 echo "  程序：$INSTALL_DIR"
 echo "  数据：$DATA_DIR/app.db"
-echo "  配置：$CONFIG_FILE（root:$RUN_USER 640；修改后 systemctl restart $SERVICE_NAME）"
+echo "  配置：$CONFIG_FILE（root:$RUN_GROUP 640；修改后 systemctl restart $SERVICE_NAME）"
 echo "  访问：https://${HOST}:${PORT}/（局域网用本机 IP，别忘了防火墙放行 ${PORT}/tcp；自签名证书需手动信任）"
 echo
 echo "常用命令："
@@ -428,8 +456,12 @@ INSTALL_DIR="$ROOT_DIR"  # 由脚本所在目录确定，不可通过环境变�
 DATA_DIR="$ROOT_DIR/data"
 # 配置文件：运行目录下的 snack-warehouse.toml（非 /etc 目录下的环境变量文件）
 CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
-RUN_USER=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+# 从已安装的 unit 读取实际运行用户（安装在家目录时是普通用户，卸载绝不能删除该账户）
+INSTALLED_USER="$(awk -F= '/^[[:space:]]*User=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$UNIT_FILE" 2>/dev/null || true)"
+INSTALLED_GROUP="$(awk -F= '/^[[:space:]]*Group=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$UNIT_FILE" 2>/dev/null || true)"
+RUN_USER="${INSTALLED_USER:-snack-warehouse}"
+RUN_GROUP="${INSTALLED_GROUP:-$RUN_USER}"
 
 usage() {
   awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
@@ -491,9 +523,14 @@ DELETE_USER=0
 if ask_yes_no "是否同时删除数据库与配置？$DATA_DIR 与 $CONFIG_FILE（不可恢复）"; then
   DELETE_DATA=1
 fi
+DELETE_USER=0
 if [ "$RUN_USER" != "root" ] && id -u "$RUN_USER" >/dev/null 2>&1; then
-  if ask_yes_no "是否同时删除系统用户与用户组 $RUN_USER？"; then
-    DELETE_USER=1
+  if [ "$(id -u "$RUN_USER")" -lt 1000 ]; then
+    if ask_yes_no "是否同时删除系统用户与用户组 $RUN_USER？"; then
+      DELETE_USER=1
+    fi
+  else
+    echo "提示：运行用户 $RUN_USER 是普通账户，卸载不会删除该用户。"
   fi
 fi
 echo
@@ -542,13 +579,15 @@ fi
 
 # 4) 按交互选择删除系统用户与用户组
 if [ "$DELETE_USER" -eq 1 ]; then
-  if [ "$RUN_USER" != "root" ] && id -u "$RUN_USER" >/dev/null 2>&1; then
+  if [ "$RUN_USER" != "root" ] && id -u "$RUN_USER" >/dev/null 2>&1 && [ "$(id -u "$RUN_USER")" -lt 1000 ]; then
     echo "[uninstall] 删除系统用户：$RUN_USER"
     userdel "$RUN_USER" 2>/dev/null || true
   fi
-  if [ "$RUN_USER" != "root" ] && getent group "$RUN_USER" >/dev/null 2>&1; then
-    echo "[uninstall] 删除系统用户组：$RUN_USER"
-    groupdel "$RUN_USER" 2>/dev/null || true
+  # 仅删除系统组（gid < 1000），避免误删普通用户的主组
+  if [ "$RUN_GROUP" != "root" ] && getent group "$RUN_GROUP" >/dev/null 2>&1 \
+     && [ "$(getent group "$RUN_GROUP" | cut -d: -f3)" -lt 1000 ] 2>/dev/null; then
+    echo "[uninstall] 删除系统用户组：$RUN_GROUP"
+    groupdel "$RUN_GROUP" 2>/dev/null || true
   fi
 fi
 
@@ -562,7 +601,8 @@ if [ "$DELETE_DATA" -eq 0 ]; then
   [ -f "$CONFIG_FILE" ] && KEEP+=("配置：$CONFIG_FILE")
   [ -d "$DATA_DIR" ] && KEEP+=("数据：$DATA_DIR")
 fi
-[ "$DELETE_USER" -eq 0 ] && id -u "$RUN_USER" >/dev/null 2>&1 && KEEP+=("用户：$RUN_USER")
+[ "$DELETE_USER" -eq 0 ] && id -u "$RUN_USER" >/dev/null 2>&1 \
+  && [ "$(id -u "$RUN_USER")" -lt 1000 ] && KEEP+=("用户：$RUN_USER")
 if [ "${#KEEP[@]}" -gt 0 ]; then
   echo "已保留（重新安装会继续使用）："
   printf '  %s\n' "${KEEP[@]}"
