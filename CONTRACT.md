@@ -24,7 +24,7 @@
   └── frontend/            # 前端 lane 独占
   ```
 - **静态资源托管规则**：
-  - 后端从 `backend/static/` 目录提供静态文件（目录可由环境变量 `STATIC_DIR` 覆盖，默认 `backend/static`）。
+  - 后端从静态资源目录提供文件（默认 `static`，相对工作目录；可由 TOML 配置 `static_dir` 覆盖）。
   - `/api/*` 路径永远优先于静态路由；非 `/api` 且磁盘上无对应文件的路径一律回退到 `index.html`（SPA fallback）。
   - **一键编译 `build.sh`（repo 根，bash，`set -euo pipefail`，可重复执行）**：
   1) `cd frontend && npm install && npm run build`；
@@ -33,20 +33,20 @@
   结束时打印“编译成功”及下一步提示（运行 `./run.sh`）。
 - **一键运行 `run.sh`（repo 根，bash，`set -euo pipefail`）**：
   1) 若 `backend/static/index.html` 或后端二进制不存在，先自动调用 `./build.sh`；
-  2) 以环境变量默认值启动后端（支持 `PORT` 默认 3000、`STATIC_DIR`、`SNACK_DB_PATH` 默认 `data/app.db`、`ADMIN_USERNAME`/`ADMIN_PASSWORD`）；
+  2) 以配置文件默认值启动后端：读取与二进制同目录的 `snack-warehouse.toml`（缺失/解析失败则用默认值 `host=0.0.0.0`、`port=3000`、`db_path=data/app.db`、`static_dir=static`、`admin_username=admin`、`admin_password=admin123`），不读取环境变量；
   3) 前台运行并转发信号（trap SIGINT/SIGTERM，Ctrl-C 能干净退出子进程）；启动成功后打印访问地址（如 `https://127.0.0.1:3000`；同一端口自动识别明文 HTTP 并 308 跳转到 HTTPS；首次运行自动生成自签名证书到 `data/certs/`）。
   两脚本均需 `chmod +x`，并在 README 的“快速开始”中作为主要方式说明。
 - `backend/static/` 及其内容不提交到 git（.gitignore 已忽略），由 build.sh 生成。
 
 ## 1. 数据模型（SQLite）
 
-默认数据库文件：`data/app.db`（可用环境变量 `SNACK_DB_PATH` 覆盖；`data/` 已被 .gitignore 忽略）。首次启动自动建表。
+默认数据库文件：`data/app.db`（可由 TOML 配置 `db_path` 覆盖；`data/` 已被 .gitignore 忽略）。首次启动自动建表。
 
 **admin 用户自动初始化（后端启动时执行，幂等）**：
 - 启动时若 `users` 表为空（或不存在名为 `admin` 的用户），自动创建默认管理员：用户名 `admin`、密码 `admin123`，`is_admin=1`。
-- 支持环境变量覆盖初始账号：`ADMIN_USERNAME`（默认 `admin`）、`ADMIN_PASSWORD`（默认 `admin123`）。
-- 幂等保证：每次启动都检查，**已存在同名用户则绝不覆盖/重置其密码**（即使用户后续改过密码）；初始化发生时向日志打印一行提示（含用户名，**不打印密码以外的敏感信息，密码仅在使用了非默认值时可提示“已通过 ADMIN_PASSWORD 设置”**）。
-- README 必须说明：自动初始化行为、环境变量、默认密码，以及登录后立即修改密码。
+- 支持通过 TOML 配置覆盖初始账号：`admin_username`（默认 `admin`）、`admin_password`（默认 `admin123`）。
+- 幂等保证：每次启动都检查，**已存在同名用户则绝不覆盖/重置其密码**（即使用户后续改过密码）；初始化发生时向日志打印一行提示（含用户名，**不打印密码以外的敏感信息，密码仅在使用了非默认值时可提示“已通过 admin_password 设置”**）。
+- README 必须说明：自动初始化行为、TOML 配置文件键、默认密码，以及登录后立即修改密码。
 
 ### users
 | 列 | 类型 | 说明 |
@@ -177,6 +177,6 @@
 
 ## 5. 各 lane 验证要求（必须在报告中附命令与输出摘要）
 
-- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、ADMIN_USERNAME/ADMIN_PASSWORD 覆盖生效**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**、**v3：生产日期/保质期/过期日期任意两项自动推导第三项、保质期单位保存与非法单位 400、三项矛盾与过期早于生产 → 400、旧库自动补列且幂等、状态与日期不一致 → 400、打开日期晚于吃完日期 → 400、snacks 按 created_at 倒序、users 按用户名升序**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
+- 后端：`cargo build`、`cargo test`（至少覆盖：登录、未授权 401、非管理员 403、snacks CRUD、reminders 分级计算、admin 用户增删及禁止删除自己、**admin 自动初始化：空库启动创建默认 admin、重复启动不重置已改密码的 admin、TOML `admin_username`/`admin_password` 覆盖生效**、**v2：opened_at/finished_at 纯日期校验（接受 `YYYY-MM-DD`，拒绝 `YYYY-MM-DDTHH:MM`）、status=finished 自动填充当前本地日期、存量 `YYYY-MM-DDTHH:MM` 迁移截断为 `YYYY-MM-DD` 且幂等、`GET /api/locations?q=` 子串过滤与无参返回全部**、**v3：生产日期/保质期/过期日期任意两项自动推导第三项、保质期单位保存与非法单位 400、三项矛盾与过期早于生产 → 400、旧库自动补列且幂等、状态与日期不一致 → 400、打开日期晚于吃完日期 → 400、snacks 按 created_at 倒序、users 按用户名升序**）。可用 `cargo test` 内嵌 axum tower ServiceExt 测试，避免起真实端口。
 - 前端：`ng build`（或 `npm run build`）成功，无 TypeScript 错误；**`npm test`（vitest）全绿**。
 - 集成：`./build.sh` 一键编译成功；`./run.sh` 一键运行后用 curl 冒烟：登录→CRUD→reminders→admin 用户管理→`GET /` 返回 index.html→未知路径 SPA fallback→Ctrl-C 干净退出（进程无残留）。

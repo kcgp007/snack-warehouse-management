@@ -30,7 +30,7 @@ snack-warehouse-management/
 ├── README.md        # 本文件
 ├── build.sh         # 一键编译脚本（产物输出到 dist/）
 ├── backend/         # Rust 后端
-│   ├── src/         # main.rs（入口/环境变量）、lib.rs（路由装配）、auth/snacks/reminders/users/db/static_files...
+│   ├── src/         # main.rs（入口/TOML 配置读取）、lib.rs（路由装配）、auth/snacks/reminders/users/db/static_files...
 │   ├── tests/api.rs # 集成测试（tower::ServiceExt::oneshot，无需真实端口）
 │   └── static/      # 前端构建产物（由 build.sh 生成，不入 git）
 └── frontend/        # Angular 前端
@@ -41,7 +41,7 @@ dist/                # 编译产物目录（由 build.sh 生成，不入 git）
 │   ├── static/                   # 前端静态资源
 │   ├── run.sh                    # 一键运行脚本（HTTPS）
 │   ├── install.sh                # 一键安装为 systemd 系统服务（开机自启）
-│   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除数据）
+│   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除数据与用户）
 ```
 
 ## 快速开始
@@ -68,16 +68,29 @@ cd dist
 ./backend/target/debug/snack-warehouse-backend
 ```
 
-### 环境变量
+### 配置文件（TOML）
 
-| 变量 | 默认值 | 说明 |
+服务启动时读取**与二进制同目录**的 `snack-warehouse.toml`（`dist/` 布局即 `dist/snack-warehouse.toml`；systemd 安装后为安装目录下的同名文件）。文件缺失或解析失败时回退默认值，**不读取任何环境变量**：
+
+```toml
+host = "0.0.0.0"
+port = 3000
+# db_path = "data/app.db"      # 可选，相对路径基于工作目录
+# static_dir = "static"        # 可选，相对路径基于工作目录
+admin_username = "admin"
+admin_password = "admin123"
+```
+
+| 键 | 默认值 | 说明 |
 |---|---|---|
-| `PORT` | `3000` | 监听端口 |
-| `HOST` | `0.0.0.0` | 监听地址，默认监听所有网卡（局域网可直接远程访问）；仅本机访问可设 `127.0.0.1` |
-| `ADMIN_USERNAME` | `admin` | 首次启动自动初始化的管理员用户名 |
-| `ADMIN_PASSWORD` | `admin123` | 首次启动自动初始化的管理员密码 |
+| `host` | `0.0.0.0` | 监听地址，默认所有网卡（局域网可直接访问）；仅本机可设 `127.0.0.1` |
+| `port` | `3000` | 监听端口（HTTP 与 HTTPS 共用） |
+| `db_path` | `data/app.db` | SQLite 数据库路径，相对工作目录 |
+| `static_dir` | `static` | 前端静态资源目录，相对工作目录 |
+| `admin_username` | `admin` | 首次建库时创建的管理员用户名 |
+| `admin_password` | `admin123` | 首次建库时创建的管理员密码（登录后请立即修改） |
 
-核心路径（后端二进制、静态资源目录、数据库路径）由脚本自动推导（优先当前目录 `dist/`，回退仓库 `backend/` 布局），**不通过环境变量设置**；可通过 `PORT`/`HOST`/`ADMIN_USERNAME`/`ADMIN_PASSWORD` 覆盖非路径配置。
+`run.sh` 不导出任何环境变量，路径由脚本按 `dist/` 布局自动推导；systemd 安装时生成的配置文件权限为 `640 root:snack-warehouse`（管理员可编辑、服务可读但不可改），修改后执行 `sudo systemctl restart snack-warehouse` 生效。
 
 ### HTTPS 与证书
 
@@ -98,14 +111,14 @@ cd dist
 ### 远程无法访问？
 
 1. **确认监听地址**：默认 `HOST=0.0.0.0`（所有网卡）。启动日志应显示 `[server] listening on https://0.0.0.0:3000`；若设了 `HOST=127.0.0.1` 则仅本机可访问。
-2. **防火墙放行**：放行 TCP 3000（或你自定义的 `PORT`）。例如 `sudo ufw allow 3000/tcp`（Ubuntu）。
+2. **防火墙放行**：放行 TCP 3000（或你自定义的 `port`）。例如 `sudo ufw allow 3000/tcp`（Ubuntu）。
 3. **用局域网 IP 访问**：在服务器上执行 `hostname -I` 取 IP，其他设备浏览器打开 `https://<该IP>:3000`；两端需在同一局域网（或已配置路由/端口转发）。
 4. **容器部署**：需同时映射端口（如 `-p 3000:3000`），`HOST` 保持默认 `0.0.0.0` 即可。
 
 ### 默认账号与安全提示
 
 - 首次启动时若库中不存在同名用户，会自动创建默认管理员：**用户名 `admin` / 密码 `admin123`**（启动日志会打印一行提示）。
-- 初始化是幂等的：**已存在的同名用户绝不会被覆盖或重置密码**；可通过 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 覆盖初始账号。
+- 初始化是幂等的：**已存在的同名用户绝不会被覆盖或重置密码**；可通过 TOML 的 `admin_username` / `admin_password` 覆盖初始账号。
 - ⚠️ **请在首次登录后立即通过 `/change-password` 修改默认密码**，不要在生产环境保留 `admin123`。
 
 ## 系统级安装（systemd）
@@ -125,7 +138,7 @@ sudo PROFILE=release ./install.sh # 使用 release 后端（仍会先构建前�
 - 创建无登录 shell 的系统用户 `snack-warehouse`；
 - **默认就地安装**：程序与静态资源放在 `install.sh` 所在目录（即 `dist/`），数据库放在其下的 `data/` 子目录；
 - 路径由脚本自动推导，**不通过环境变量设置核心路径**（`INSTALL_DIR`/`DATA_DIR`/`SNACK_DB_PATH`/`STATIC_DIR` 等环境变量不再生效）；
-- 首次安装生成 `/etc/snack-warehouse.env`（root 600，仅保留 PORT/HOST/ADMIN_USERNAME/ADMIN_PASSWORD），升级时保留已有配置；
+- 首次安装生成 `<安装目录>/snack-warehouse.toml`（TOML 格式，`root:snack-warehouse` 权限 `640`），升级时保留已有配置并自动纠正权限；
 - 写入 `/etc/systemd/system/snack-warehouse.service`（`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写），设为开机自启并启动；
 - 通过 `curl -k` 做启动健康检查（自签名证书）。
 
@@ -135,19 +148,19 @@ sudo PROFILE=release ./install.sh # 使用 release 后端（仍会先构建前�
 sudo systemctl status snack-warehouse
 sudo systemctl restart snack-warehouse
 sudo journalctl -u snack-warehouse -f
-sudoedit /etc/snack-warehouse.env    # 改端口/初始管理员等，保存后重启服务生效
+sudoedit /path/to/install/snack-warehouse.toml   # 改端口/初始管理员等，保存后重启服务生效
 ```
 
 卸载：
 
 ```bash
 cd dist                          # 进入安装时所在的目录（即 dist/）
-sudo ./uninstall.sh            # 移除服务与程序，保留配置和数据库
-sudo ./uninstall.sh --purge    # 连同配置、数据库、运行用户一并删除（会二次确认）
+sudo ./uninstall.sh            # 移除服务与程序（配置文件随目录删除），保留数据库
+sudo ./uninstall.sh --purge    # 额外删除数据库与运行用户（会二次确认）
 sudo ./uninstall.sh --purge --yes
 ```
 
-> 整个 `dist/` 文件夹可拷贝到任意服务器路径，进入后执行 `./run.sh` 即可直接运行；如需 systemd 托管，在该目录下执行 `sudo ./install.sh`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行 `PORT`（默认 3000/tcp）。
+> 整个 `dist/` 文件夹可拷贝到任意服务器路径，进入后执行 `./run.sh` 即可直接运行；如需 systemd 托管，在该目录下执行 `sudo ./install.sh`。安装后请立即登录修改默认密码 `admin123`；对外提供服务时记得防火墙放行配置中的 `port`（默认 3000/tcp）。
 
 ## API 概览
 
