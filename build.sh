@@ -92,39 +92,28 @@ cat > "$DIST_DIR/install.sh" <<'INSTALL_EOF'
 # 一键安装：把零食仓库管理平台安装为 systemd 系统级守护进程。
 #
 # 用法：
-#   sudo ./install.sh                      # 编译 + 交互式安装/升级，开机自启
+#   sudo ./install.sh                      # 编译 + 安装/升级，开机自启
 #   sudo ./install.sh --no-build           # 使用现有编译产物（不重新构建）
 #   sudo ./install.sh --profile release    # 使用 release 版本后端二进制
-#   sudo ./install.sh --defaults           # 不询问，全部使用默认值（自动化用）
-#   sudo ./install.sh --install-dir PATH   # 指定安装目录
-#   sudo ./install.sh --run-user USER      # 指定运行服务的用户
 #   sudo ./install.sh --help
 #
-# 安装目录与运行用户不会被预判：默认值只是建议，安装时会逐项询问并校验
-#   - 安装目录默认：脚本所在目录
-#   - 运行用户默认：执行 sudo 的用户；不存在时可选择创建为系统用户
+# 安装位置：install.sh 所在目录（自动解析符号链接）
+# 运行用户：snack-warehouse（不存在时创建为无登录 shell 的系统用户）
 #   - data/ 与 snack-warehouse.toml 始终位于安装目录内
-#   - 安装前会以该用户实际测试能否进入安装目录（避免 systemd 200/CHDIR）
-# 全部参数均不使用环境变量。
+#   - 兼容 /opt、/srv、/usr/local、/home 等不同安装位置：
+#       * 目录或祖先缺少穿越权限时，用 ACL 仅授予 x（不可列出/读取其他文件）
+#       * 无 ACL 工具、noexec 挂载、危险路径等情况会提前检测并给出明确指引
+#       * 升级时自动纠正遗留的程序/数据/配置所有权与权限
+# 不使用任何环境变量。
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 SERVICE_NAME=snack-warehouse
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 PROFILE=debug
 
 SKIP_BUILD=0
-ASSUME_DEFAULTS=0
-
-# 部署参数：不预判安装目录与运行用户（实际部署时二者都不确定），
-# 安装时交互式询问；非交互环境或 --defaults 时使用默认值。不读取任何环境变量。
-INSTALL_DIR=""
-DATA_DIR=""
-CONFIG_FILE=""
-RUN_USER=""
-RUN_GROUP=""
-MANAGE_USER=0
 
 usage() {
   awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
@@ -133,17 +122,6 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-build) SKIP_BUILD=1 ;;
-    --defaults) ASSUME_DEFAULTS=1 ;;
-    --install-dir)
-      shift
-      INSTALL_DIR="${1:-}"
-      ;;
-    --install-dir=*) INSTALL_DIR="${1#*=}" ;;
-    --run-user)
-      shift
-      RUN_USER="${1:-}"
-      ;;
-    --run-user=*) RUN_USER="${1#*=}" ;;
     --profile)
       shift
       PROFILE="${1:-}"
@@ -186,53 +164,14 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
-# ---------- 采集部署参数（交互式；不预判目录与用户） ----------
-ask() { # $1=提示 $2=默认值
-  local reply=""
-  if [ "$ASSUME_DEFAULTS" -eq 1 ] || [ ! -r /dev/tty ]; then
-    printf '%s' "$2"
-    return 0
-  fi
-  read -r -p "$1 [$2]: " reply </dev/tty || reply=""
-  printf '%s' "${reply:-$2}"
-}
-
-if [ -z "$INSTALL_DIR" ]; then
-  INSTALL_DIR="$(ask "安装目录（程序、静态资源、data/ 与配置都放在这里）" "$ROOT_DIR")"
-fi
-INSTALL_DIR="${INSTALL_DIR%/}"
-case "$INSTALL_DIR" in
-  /*) ;;
-  *)
-    if ! INSTALL_DIR="$(cd "$INSTALL_DIR" 2>/dev/null && pwd)"; then
-      echo "错误：安装目录不存在或无法解析：$INSTALL_DIR" >&2
-      exit 1
-    fi
-    ;;
-esac
+# ---------- 部署参数：目录 = 脚本所在目录；用户 = snack-warehouse ----------
+INSTALL_DIR="$ROOT_DIR"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_FILE="$INSTALL_DIR/snack-warehouse.toml"
+RUN_USER=snack-warehouse
+RUN_GROUP=snack-warehouse
+MANAGE_USER=1
 
-DEFAULT_USER="${SUDO_USER:-}"
-if [ -z "$DEFAULT_USER" ] || [ "$DEFAULT_USER" = "root" ]; then
-  # 没有 sudo 上下文时，退回到脚本目录的所有者
-  DEFAULT_USER="$(stat -c '%U' "$ROOT_DIR" 2>/dev/null || true)"
-fi
-if [ -z "$DEFAULT_USER" ] || [ "$DEFAULT_USER" = "root" ] || [ "$DEFAULT_USER" = "UNKNOWN" ]; then
-  DEFAULT_USER="snack-warehouse"
-fi
-if [ -z "$RUN_USER" ]; then
-  RUN_USER="$(ask "运行服务的用户（需对安装目录有执行权限，数据目录将归属该用户）" "$DEFAULT_USER")"
-fi
-
-if ! [[ "$RUN_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-  echo "错误：运行用户不是合法的用户名：$RUN_USER" >&2
-  exit 1
-fi
-if [ "$RUN_USER" = "root" ]; then
-  echo "错误：拒绝以 root 运行服务，请指定普通用户或专用系统用户。" >&2
-  exit 1
-fi
 for path in "$INSTALL_DIR" "$DATA_DIR"; do
   case "$path" in
     /|/opt|/var|/var/lib|/usr|/etc|/home|/root|"")
@@ -246,22 +185,24 @@ for path in "$INSTALL_DIR" "$DATA_DIR"; do
   esac
 done
 
-# 运行用户：已存在则直接使用（普通账户永不由卸载删除）；不存在则询问是否创建系统用户
-if id -u "$RUN_USER" >/dev/null 2>&1; then
-  RUN_GROUP="$(id -gn "$RUN_USER")"
-  MANAGE_USER=0
-  echo "[install] 使用现有运行用户：$RUN_USER（组 $RUN_GROUP）"
-else
-  CREATE_USER="$(ask "用户 $RUN_USER 不存在，是否创建为系统用户？(y/N)" "N")"
-  case "$CREATE_USER" in
-    y|Y|yes|YES) ;;
-    *)
-      echo "错误：运行用户不存在：$RUN_USER（未创建）。请先创建用户或改用已有账户。" >&2
+# noexec 挂载无法执行后端二进制，提前报错（比健康检查超时更易定位）
+if command -v findmnt >/dev/null 2>&1; then
+  MOUNT_OPTS="$(findmnt -no OPTIONS --target "$INSTALL_DIR" 2>/dev/null || true)"
+  case ",$MOUNT_OPTS," in
+    *,noexec,*)
+      echo "错误：$INSTALL_DIR 所在文件系统以 noexec 挂载，无法执行服务程序。" >&2
+      echo "       请把 dist/ 移到可执行的位置（如 /opt/snack-warehouse）后重试。" >&2
       exit 1
       ;;
   esac
-  RUN_GROUP="$RUN_USER"
-  MANAGE_USER=1
+fi
+
+# 运行用户：已存在则直接使用（普通账户永不由卸载删除）；不存在则询问是否创建系统用户
+if id -u "$RUN_USER" >/dev/null 2>&1; then
+  RUN_GROUP="$(id -gn "$RUN_USER")"
+  echo "[install] 使用现有运行用户：$RUN_USER（组 $RUN_GROUP）"
+else
+  echo "[install] 运行用户 $RUN_USER 不存在，将创建为系统用户"
 fi
 
 echo "[install] 安装目录：$INSTALL_DIR"
@@ -339,50 +280,18 @@ if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
   systemctl stop "$SERVICE_NAME"
 fi
 
-# 3) 安装程序与静态资源（可重复执行，静态资源整体替换）
-# 就地运行（INSTALL_DIR == 脚本所在目录）时跳过自复制，避免 rm -rf 误删源文件
-IN_PLACE=0
-if [ -d "$INSTALL_DIR" ] && [ "$(cd "$INSTALL_DIR" && pwd)" = "$(cd "$ROOT_DIR" && pwd)" ]; then
-  IN_PLACE=1
-fi
-if [ "$IN_PLACE" -eq 1 ]; then
-  echo "[install] 就地运行：$INSTALL_DIR（产物已就位，跳过自复制）"
-else
-  install -d -m 755 "$INSTALL_DIR"
-  install -m 755 "$BIN_SRC" "$INSTALL_DIR/snack-warehouse-backend"
-  rm -rf "$INSTALL_DIR/static"
-  install -d -m 755 "$INSTALL_DIR/static"
-  cp -a "$STATIC_SRC/." "$INSTALL_DIR/static/"
-  chmod -R a+rX "$INSTALL_DIR/static"
-  if [ -f "$ROOT_DIR/README.md" ]; then
-    install -m 644 "$ROOT_DIR/README.md" "$INSTALL_DIR/README.md"
-  fi
-  for f in install.sh uninstall.sh; do
-    if [ -f "$ROOT_DIR/$f" ]; then
-      install -m 755 "$ROOT_DIR/$f" "$INSTALL_DIR/$f"
-    fi
-  done
+# 3) 安装程序与静态资源（就地安装，可重复执行）
+# INSTALL_DIR 已固定为脚本所在目录，产物由 build.sh 生成，无需自复制。
+chmod 755 "$INSTALL_DIR"
+chmod 755 "$BIN_SRC"
+chmod -R a+rX "$STATIC_SRC"
+if [ -f "$ROOT_DIR/README.md" ]; then
+  chmod 644 "$ROOT_DIR/README.md"
 fi
 
-# 运行用户必须能进入安装目录（父目录缺少 x 权限会导致 systemd 200/CHDIR）
-as_user() {
-  local u="$1"; shift
-  if command -v runuser >/dev/null 2>&1; then
-    runuser -u "$u" -- "$@"
-  else
-    sudo -u "$u" -- "$@"
-  fi
-}
-if ! as_user "$RUN_USER" test -x "$INSTALL_DIR"; then
-  echo "错误：运行用户 $RUN_USER 无法进入安装目录 $INSTALL_DIR。" >&2
-  echo "       请为路径上的父目录增加执行权限（如 chmod o+x /home/xxx），" >&2
-  echo "       或把安装目录改到该用户可访问的位置（如 /opt/snack-warehouse）。" >&2
-  exit 1
-fi
-
-# 4) 数据目录（升级时确保归属正确）
+# 4) 数据目录（升级时确保归属正确；-R 兼容旧版本遗留的 root/其他用户文件）
 install -d -m 750 "$DATA_DIR"
-chown "$RUN_USER:$RUN_GROUP" "$DATA_DIR"
+chown -R "$RUN_USER:$RUN_GROUP" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
 # 5) 配置文件（TOML，运行目录下）：首次安装生成，升级时保留用户修改
@@ -403,7 +312,49 @@ fi
 chown root:"$RUN_GROUP" "$CONFIG_FILE"
 chmod 640 "$CONFIG_FILE"
 
-# 6) systemd unit
+# 6) 兼容不同安装位置：确保运行用户能穿越到安装目录
+#    家目录常见 700，专用系统用户无法进入时会触发 systemd 200/CHDIR。
+#    优先用 ACL 仅授予 x（可通过但不可列出/读取），不影响目录原有访问控制。
+as_user() {
+  local u="$1"; shift
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$u" -- "$@"
+  else
+    sudo -u "$u" -- "$@"
+  fi
+}
+
+ANCESTORS=()
+_d="$INSTALL_DIR"
+while [ -n "$_d" ] && [ "$_d" != "/" ]; do
+  ANCESTORS=("$_d" "${ANCESTORS[@]}")
+  _d="$(dirname "$_d")"
+done
+ACL_BLOCKED=""
+for _d in "${ANCESTORS[@]}"; do
+  if ! as_user "$RUN_USER" test -x "$_d" 2>/dev/null; then
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -m "u:$RUN_USER:x" "$_d" 2>/dev/null || ACL_BLOCKED="$_d"
+    else
+      ACL_BLOCKED="$_d"
+    fi
+    if [ -n "$ACL_BLOCKED" ]; then break; fi
+  fi
+done
+
+if ! as_user "$RUN_USER" test -x "$INSTALL_DIR" 2>/dev/null; then
+  echo "错误：运行用户 $RUN_USER 无法进入安装目录 $INSTALL_DIR。" >&2
+  if [ -n "$ACL_BLOCKED" ]; then
+    echo "       无法为 $_d 授予穿越权限（缺少 setfacl 或文件系统不支持 ACL）。" >&2
+  fi
+  echo "       可选处理方式：" >&2
+  echo "         1) 安装 acl 工具（提供 setfacl）后重试；" >&2
+  echo "         2) 把整个 dist/ 移到 /opt、/srv 等目录后再执行 ./install.sh；" >&2
+  echo "         3) 为路径上的父目录授予其他用户执行权限（如 chmod o+x /home/xxx，会放宽访问）。" >&2
+  exit 1
+fi
+
+# 7) systemd unit
 READ_WRITE_PATHS="$DATA_DIR"
 # 安装在 /home 下时，ProtectHome=true 会屏蔽程序目录，导致服务无法启动（表现为健康检查失败）
 case "$INSTALL_DIR" in
@@ -663,6 +614,20 @@ if [ "$DELETE_USER" -eq 1 ]; then
     echo "[uninstall] 删除系统用户组：$RUN_GROUP"
     groupdel "$RUN_GROUP" 2>/dev/null || true
   fi
+fi
+
+# 清理安装时为穿越家目录添加的 ACL（仅移除本服务的用户条目）
+if command -v setfacl >/dev/null 2>&1; then
+  _d="$INSTALL_DIR"
+  while [ -n "$_d" ] && [ "$_d" != "/" ]; do
+    setfacl -x "u:$RUN_USER" "$_d" 2>/dev/null || true
+    _d="$(dirname "$_d")"
+  done
+fi
+
+# 保留数据但删除运行用户时，把数据交还 root，避免孤儿 UID
+if [ "$DELETE_USER" -eq 1 ] && [ "$DELETE_DATA" -eq 0 ] && [ -d "$DATA_DIR" ]; then
+  chown -R root:root "$DATA_DIR"
 fi
 
 # 已清空则顺手删除安装目录本身

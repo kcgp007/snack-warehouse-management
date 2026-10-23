@@ -127,26 +127,29 @@ Linux + systemd 环境可把应用安装为系统级守护进程（开机自启�
 
 ```bash
 cd dist                              # 进入编译产物目录
-sudo ./install.sh                    # 交互式安装/升级：逐项询问安装目录与运行用户
+sudo ./install.sh                    # 安装/升级：安装位置 = 本脚本所在目录
 sudo ./install.sh --no-build         # 使用现有编译产物
-sudo ./install.sh --defaults         # 不询问，使用默认值（自动化）
-sudo ./install.sh --install-dir /opt/snack-warehouse --run-user snack
 sudo ./install.sh --profile release  # 使用 release 后端（仍会先构建前端）
 ```
 
-安装脚本**不预判安装目录与运行用户**（部署时二者都是变量），而是逐项询问并校验，直接回车采用方括号中的默认值：
+安装位置与运行用户是固定的，不需要也不允许通过参数或环境变量指定：
 
-- **安装目录**：默认脚本所在目录；可填任意可写路径（如 `/opt/snack-warehouse`），脚本会把二进制、`static/`、`data/`、配置与两个脚本一并放到该目录；
-- **运行用户**：默认执行 `sudo` 的账户；可填已有用户（推荐普通账户或专用系统账户）。若用户不存在，会询问是否创建为无登录 shell 的系统用户（默认 N，不创建则退出）；
-- 安装前会**以该用户实际测试能否进入安装目录**，避免家目录权限不足导致 systemd `200/CHDIR`；不满足时直接报错并给出修复建议。
+- **安装目录**：始终是 `install.sh` 所在目录（用 `pwd -P` 解析符号链接，`data/` 与 `snack-warehouse.toml` 都在其下）；
+- **运行用户**：始终是 `snack-warehouse`；不存在时自动创建为无登录 shell 的系统用户；
+- **兼容不同安装位置**（`/opt`、`/srv`、`/usr/local`、家目录等）：
+  - 目录或祖先缺少穿越权限时，用 `setfacl` 只添加 `x`（可通过，但不可列出或读取其他文件），不改变原访问控制；
+  - 系统缺少 `setfacl` 或文件系统不支持 ACL 时，直接给出三种可选处理方式并退出；
+  - 检测 `noexec` 挂载并提前报错；拒绝 `/`、`/home` 等危险路径；
+  - 升级时递归纠正 `data/` 所有权（兼容旧版本 root 或其他用户创建的文件）、配置 `640`、程序与静态资源 `a+rX`；
+  - 旧 unit 中的 `User=` 会被重写为 `snack-warehouse`。
 
 其余行为：
 
 - 以仓库所有者身份执行 `./build.sh`（避免在 `target/` 下留下 root 所有的文件）；
-- 首次安装生成 `<安装目录>/snack-warehouse.toml`（TOML，`root:<运行用户组>` 权限 `640`），升级时保留已有配置并自动纠正权限；
-- 写入 `/etc/systemd/system/snack-warehouse.service`：`User`/`Group` 为所选运行用户，`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写；安装在 `/home` 下时自动改用 `ProtectHome=read-only`；
+- 首次安装生成 `<安装目录>/snack-warehouse.toml`（TOML，`root:snack-warehouse` 权限 `640`），升级时保留已有配置并自动纠正权限；
+- 写入 `/etc/systemd/system/snack-warehouse.service`：`User=snack-warehouse`，`Restart=on-failure`、`ProtectSystem=strict`、仅数据目录可写；安装在 `/home` 下时自动改用 `ProtectHome=read-only`；
 - 设为开机自启并启动，通过 `curl -k` 做启动健康检查（自签名证书）；
-- **全部参数都不使用环境变量**：配置只来自交互输入、命令行参数或运行目录下的 TOML。
+- **不使用任何环境变量**：配置只来自运行目录下的 TOML。
 
 常用运维命令：
 
