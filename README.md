@@ -41,7 +41,7 @@ dist/                # 编译产物目录（由 build.sh 生成，不入 git）
 │   ├── static/                   # 前端静态资源
 │   ├── run.sh                    # 一键运行脚本（HTTPS）
 │   ├── install.sh                # 一键安装为 systemd 系统服务（开机自启）
-│   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除数据与用户）
+│   └── uninstall.sh              # 一键卸载系统服务（可选 --purge 删除配置/数据/用户）
 ```
 
 ## 快速开始
@@ -155,8 +155,8 @@ sudoedit /path/to/install/snack-warehouse.toml   # 改端口/初始管理员等�
 
 ```bash
 cd dist                          # 进入安装时所在的目录（即 dist/）
-sudo ./uninstall.sh            # 移除服务与程序（配置文件随目录删除），保留数据库
-sudo ./uninstall.sh --purge    # 额外删除数据库与运行用户（会二次确认）
+sudo ./uninstall.sh            # 移除服务与程序，保留配置和数据库
+sudo ./uninstall.sh --purge    # 连同配置、数据库、运行用户一并删除（会二次确认）
 sudo ./uninstall.sh --purge --yes
 ```
 
