@@ -300,6 +300,11 @@ chmod 640 "$CONFIG_FILE"
 
 # 6) systemd unit
 READ_WRITE_PATHS="$DATA_DIR"
+# 安装在 /home 下时，ProtectHome=true 会屏蔽程序目录，导致服务无法启动（表现为健康检查失败）
+case "$INSTALL_DIR" in
+  /home/*) PROTECT_HOME="read-only" ;;
+  *) PROTECT_HOME="true" ;;
+esac
 
 echo "[install] 写入 systemd 服务：$UNIT_FILE"
 cat > "$UNIT_FILE" <<UNIT_EOF
@@ -324,7 +329,7 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=$PROTECT_HOME
 ReadWritePaths=$READ_WRITE_PATHS
 
 [Install]
@@ -336,13 +341,25 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
-# 7) 健康检查（从配置文件读取监听地址与端口）
-HOST="0.0.0.0"  # 健康检查使用默认监听地址（实际配置由运行目录 TOML 提供）
+# 7) 健康检查（从配置文件读取实际监听地址与端口）
+toml_get() {
+  awk -F= -v key="$1" '
+    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
+      v = $2
+      sub(/#.*/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/"/, "", v)
+      print v
+      exit
+    }' "$CONFIG_FILE" 2>/dev/null || true
+}
+HOST="$(toml_get host)"
+HOST="${HOST:-0.0.0.0}"
+PORT="$(toml_get port)"
+PORT="${PORT:-3000}"
 case "$HOST" in
   ""|0.0.0.0|::|\[::\]) HOST=127.0.0.1 ;;
 esac
-PORT="3000"  # 健康检查使用默认端口（实际配置由运行目录 TOML 提供）
-PORT="3000"
 case "$HOST" in
   *:*) CURL_HOST="[$HOST]" ;;
   *) CURL_HOST="$HOST" ;;
@@ -357,8 +374,16 @@ if command -v curl >/dev/null 2>&1; then
     sleep 1
   done
   if [ "$ok" -ne 1 ]; then
-    echo "错误：服务已启动但健康检查失败（https://${CURL_HOST}:${PORT}/）。最近日志：" >&2
-    systemctl --no-pager -l status "$SERVICE_NAME" | tail -n 20 >&2 || true
+    echo "错误：健康检查失败（https://${CURL_HOST}:${PORT}/，等待 30 秒）。" >&2
+    echo "--- systemctl status ---" >&2
+    systemctl --no-pager -l status "$SERVICE_NAME" 2>&1 | tail -n 20 >&2 || true
+    echo "--- journalctl（最近 50 行） ---" >&2
+    journalctl -u "$SERVICE_NAME" -n 50 --no-pager 2>&1 | tail -n 50 >&2 || true
+    echo >&2
+    echo "排查提示：" >&2
+    echo "  - 端口被占用：ss -ltnp | grep :${PORT}" >&2
+    echo "  - 配置无法读取：ls -l $CONFIG_FILE（应为 root:$RUN_USER 640）" >&2
+    echo "  - 手动前台运行：cd $INSTALL_DIR && sudo -u $RUN_USER ./snack-warehouse-backend" >&2
     exit 1
   fi
 fi
