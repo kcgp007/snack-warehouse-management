@@ -280,22 +280,23 @@ install -d -m 750 "$DATA_DIR"
 chown "$RUN_USER:$RUN_USER" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
-# 5) 环境变量文件：首次安装生成，升级时保留用户修改
+# 5) 配置文件（TOML，运行目录下）：首次安装生成，升级时保留用户修改
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "[install] 生成配置文件：$CONFIG_FILE（TOML 格式，运行目录下）"
-  install -m 600 /dev/null "$CONFIG_FILE"
+  install -m 640 /dev/null "$CONFIG_FILE"
   cat > "$CONFIG_FILE" <<TOML_EOF
 host = "0.0.0.0"
 port = 3000
 admin_username = "admin"
 admin_password = "admin123"
 TOML_EOF
-  chmod 600 "$CONFIG_FILE"
-  chown root:root "$CONFIG_FILE"
   echo "[install] ⚠️  默认管理员密码为 admin123，请登录后立即修改（或先编辑 $CONFIG_FILE 再重启服务）。"
 else
   echo "[install] 保留已有配置文件：$CONFIG_FILE（TOML 格式，运行目录下）"
 fi
+# 无论新建还是升级：root 可写、服务组只读，避免服务读不到配置
+chown root:"$RUN_USER" "$CONFIG_FILE"
+chmod 640 "$CONFIG_FILE"
 
 # 6) systemd unit
 READ_WRITE_PATHS="$DATA_DIR"
@@ -367,7 +368,7 @@ echo "安装完成 ✅"
 echo "  服务：$SERVICE_NAME.service（已设为开机自启）"
 echo "  程序：$INSTALL_DIR"
 echo "  数据：$DATA_DIR/app.db"
-echo "  配置：$CONFIG_FILE（root 600；修改后 systemctl restart $SERVICE_NAME）"
+echo "  配置：$CONFIG_FILE（root:$RUN_USER 640；修改后 systemctl restart $SERVICE_NAME）"
 echo "  访问：https://${HOST}:${PORT}/（局域网用本机 IP，别忘了防火墙放行 ${PORT}/tcp；自签名证书需手动信任）"
 echo
 echo "常用命令："
