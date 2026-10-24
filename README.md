@@ -116,19 +116,143 @@ admin_password = "admin123"
 3. **用局域网 IP 访问**：在服务器上执行 `hostname -I` 取 IP，其他设备浏览器打开 `https://<该IP>:3000`；两端需在同一局域网（或已配置路由/端口转发）。
 4. **容器部署**：需同时映射端口（如 `-p 3000:3000`），`host` 保持默认 `0.0.0.0` 即可。
 
-### 默认账号与安全提示
+### 4. 容器部署
 
-- 首次启动时若库中不存在同名用户，会自动创建默认管理员：**用户名 `admin` / 密码 `admin123`**（启动日志会打印一行提示）。
-- 初始化是幂等的：**已存在的同名用户绝不会被覆盖或重置密码**；可通过 TOML 的 `admin_username` / `admin_password` 覆盖初始账号。
-- ⚠️ **请在首次登录后立即通过 `/change-password` 修改默认密码**，不要在生产环境保留 `admin123`。
+Docker 与 Docker Compose 是本项目的首选部署方式。整个应用作为单体镜像发布，后端 Rust + 前端 Angular 打包在同一个二进制内，容器化零配置。
 
-## 系统级安装（systemd）
-
-Linux + systemd 环境可把应用安装为系统级守护进程（开机自启、崩溃自动重启），需要 root：
+### 4.1 快速开始
 
 ```bash
-cd dist                              # 进入编译产物目录
-sudo ./install.sh                    # 安装/升级：安装位置 = 本脚本所在目录
+# 1) 克隆仓库
+# git clone git@github.com:kcgp007/snack-warehouse-management
+# cd snack-warehouse-management
+
+# 2) 一键编译（产物输出到 dist/，已完成，含 Dockerfile / .dockerignore / compose.yaml）
+./build.sh
+
+# 3) 启动
+cd dist
+# 或者直接使用根目录的 docker compose（已准备就绪）：
+# docker compose -f ../compose.yaml up -d --build
+```
+
+### 4.2 compose.yaml（已准备，位于项目根目录）
+
+```yaml
+version: '3.8'
+services:
+  app:
+    build: .
+    container_name: snack-warehouse
+    restart: unless-stopped
+    TZ: Asia/Shanghai
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - snack-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-kfsS", "https://127.0.0.1:3000/", "-o", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  snack-data:
+    driver: local
+```
+
+### 4.3 Dockerfile（已准备，位于项目根目录）
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM node:24-bookworm-slim AS frontend
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM rust:1.99-bookworm AS backend
+WORKDIR /src
+COPY backend/Cargo.toml backend/Cargo.lock ./
+mkdir -p src
+echo 'fn main() {}' > src/main.rs
+echo '' > src/lib.rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --bin snack-warehouse-backend && rm -rf src
+COPY backend/src ./src
+COPY --from=frontend /src/frontend/dist/frontend/browser ./static
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --bin snack-warehouse-backend
+ && install -m 755 target/release/snack-warehouse-backend /src/snack-warehouse-backend
+
+FROM debian:bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="snack-warehouse" \
+      org.opencontainers.image.description="零食仓库管理平台（Rust + axum + SQLite + Angular）" \
+      org.opencontainers.image.source="https://github.com/kcgp007/snack-warehouse-management"
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tzdata && rm -rf /var/lib/apt/lists/*
+RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home --home-dir /app --shell /usr/sbin/nologin app
+WORKDIR /app
+COPY --from=backend /src/snack-warehouse-backend /app/snack-warehouse-backend
+COPY --from=backend /src/static /app/static
+RUN mkdir -p /app/data && chown -R app:app /app/data
+ENV TZ=Asia/Shanghai
+EXPOSE 3000
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -kfsS https://127.0.0.1:3000/ -o /dev/null || exit 1
+USER 10001:10001
+CMD ["/app/snack-warehouse-backend"]
+```
+
+### 4.4 配置示例
+
+`snack-warehouse.example.toml`（已提供）中列出了所有可配置项。容器首次启动前请修改默认密码。配置从容器工作目录 `/app` 读取，相对路径均相对于 `/app/data`、`/app/static`、`snack-warehouse.toml`。
+
+### 4.5 验收清单
+
+1. `docker compose up -d --build`（或 `docker build` + `docker run`）后日志出现 `[server] listening on https://0.0.0.0:3000`
+2. `curl -k https://127.0.0.1:3000/` 返回 SPA 的 `index.html`
+3. 明文 `curl http://127.0.0.1:3000/` 返回 **308**
+4. 重启容器后库存数据仍在（卷持久化 `data/app.db`）
+5. 删除 `data/certs` 后重启能自动重建自签证书
+6. 容器内 `date` 与宿主机一致（时区 `Asia/Shanghai`）
+7. `docker stop` 日志出现 `[server] shutting down` 且退出码 0
+```
+
+### 4.6 测试
+
+```bash
+# 容器内运行测试命令
+$ docker compose exec app sh -c \
+  'curl -kfsS https://127.0.0.1:3000/ -o /dev/null && echo "健康检查 OK"'
+
+# 数据库备份
+$ docker compose exec app sh -c 'cp /app/data/app.db /app/data/backup.db'
+```
+
+完整契约见 [`CONTRACT.md`](CONTRACT.md)。
+
+### 4.7 测试
+
+```bash
+# 容器内运行测试命令
+$ docker compose exec app sh -c \
+  'curl -kfsS https://127.0.0.1:3000/ -o /dev/null && echo "健康检查 OK"'
+
+# 数据库备份
+$ docker compose exec app sh -c 'cp /app/data/app.db /app/data/backup.db'
+```
+
+完整契约见 [`CONTRACT.md`](CONTRACT.md)。sudo ./install.sh                    # 安装/升级：安装位置 = 本脚本所在目录
 sudo ./install.sh --no-build         # 使用现有编译产物
 sudo ./install.sh --profile release  # 使用 release 后端（仍会先构建前端）
 ```

@@ -1,0 +1,32 @@
+# 版本控制与文档
+.git
+.gitignore
+README.md
+CONTRACT.md
+
+# 本地运行数据与配置
+data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+snack-warehouse.toml
+snack-warehouse.example.toml
+
+# 构建产物
+dist
+backend/target
+backend/static
+frontend/node_modules
+frontend/dist
+frontend/.angular
+
+# 容器自身
+Dockerfile
+.dockerignore
+compose.yaml
+
+# 其他
+.vscode
+.idea
+*.log
