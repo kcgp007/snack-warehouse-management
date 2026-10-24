@@ -127,13 +127,8 @@ Docker 与 Docker Compose 是本项目的首选部署方式。整个应用作为
 # git clone git@github.com:kcgp007/snack-warehouse-management
 # cd snack-warehouse-management
 
-# 2) 一键编译（产物输出到 dist/，已完成，含 Dockerfile / .dockerignore / compose.yaml）
-./build.sh
-
-# 3) 启动
-cd dist
-# 或者直接使用根目录的 docker compose（已准备就绪）：
-# docker compose -f ../compose.yaml up -d --build
+# 2) 直接构建并启动（无需 build.sh）
+docker compose -f compose.yaml up -d --build
 ```
 
 ### 4.2 compose.yaml（已准备，位于项目根目录）
