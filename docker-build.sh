@@ -30,7 +30,6 @@ usage() {
   ./${0##*/}
   ./${0##*/} --help
 EOF
-    exit 0
 }
 
 # 解析参数
@@ -38,11 +37,13 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             usage
+            exit 0
             ;;
         *)
             ERROR "未知参数: $1"
             echo
             usage
+            exit 1
             ;;
     esac
 done
@@ -50,7 +51,7 @@ done
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKERFILE="$PROJECT_ROOT/Dockerfile"
 IMAGE_NAME="snack-warehouse-management-app"
-DATE_TAG="$(date +%Y%m%d)"
+DATE_TAG="$(date +%Y%m%d-%H%M%S)"
 
 INFO "项目根目录: $PROJECT_ROOT"
 
@@ -86,7 +87,11 @@ if [[ -z "$IMAGE_ID" ]]; then
     exit 1
 fi
 
-IMAGE_SIZE_BYTES="$(docker inspect --format='{{.Size}}' "$IMAGE_NAME:latest")"
+IMAGE_SIZE_BYTES="$(docker inspect --format='{{.Size}}' "$IMAGE_NAME:latest" 2>/dev/null || true)"
+if [[ -z "$IMAGE_SIZE_BYTES" ]]; then
+    ERROR "未能获取镜像 $IMAGE_NAME:latest 的大小，镜像可能不存在。"
+    exit 1
+fi
 
 # 人类可读的大小（优先 numfmt，不可用则回退原始字节）
 if command -v numfmt >/dev/null 2>&1; then

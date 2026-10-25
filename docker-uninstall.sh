@@ -51,7 +51,6 @@ usage() {
   $0 --keep-data=false    # 提示删除数据卷
   $0 --yes --keep-data=false  # 无交互删除数据卷
 EOF
-    exit 0
 }
 
 # ---------- 参数解析 ----------
@@ -59,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             usage
+            exit 0
             ;;
         --volume)
             VOLUME_NAME="$2"
@@ -87,6 +87,7 @@ while [[ $# -gt 0 ]]; do
         *)
             log_error "未知参数: $1"
             usage
+            exit 1
             ;;
     esac
 done
@@ -150,7 +151,7 @@ fi
 if [[ "$CONTAINER_RUNNING" == "true" ]]; then
     log_info "容器运行中，执行 docker compose down..."
     if [[ -f "$COMPOSE_PATH" ]]; then
-        (cd "$SCRIPT_DIR" && $COMPOSE_CMD down)
+        (cd "$SCRIPT_DIR" && "$COMPOSE_CMD" down)
     else
         log_warn "compose.yaml 不存在，直接停止并移除容器"
         docker stop "$CONTAINER_NAME" 2>/dev/null || true

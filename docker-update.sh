@@ -40,6 +40,7 @@ BACKUP_PREFIX="backup"
 IMAGE="${IMAGE_DEFAULT}"
 PULL_NEW_IMAGE="false"
 BACKUP="true"
+OLD_IMAGE=""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 参数解析
@@ -205,9 +206,10 @@ set_compose_image() {
     compose_img="$(grep -E '^[[:space:]]*image:' "$COMPOSE_FILE" | head -n1 | sed -E 's/.*image:[[:space:]]*//' | tr -d '"' || true)"
 
     if [[ -n "$compose_img" ]]; then
+        OLD_IMAGE="$compose_img"
         log_info "compose.yaml 中已存在 image: ${compose_img}，替换为 ${IMAGE}"
-        # 仅替换第一处 image:（app 服务）
-        sed -i "0,/^[[:space:]]*image:/s//image: ${IMAGE}/" "$COMPOSE_FILE"
+        # 替换 image: 行（可移植写法，替换整行）
+        awk -v img="$IMAGE" '!done && /^[[:space:]]*image:/ {print "    image: " img; done=1; next} {print}' "$COMPOSE_FILE" > "$COMPOSE_FILE.tmp" && mv "$COMPOSE_FILE.tmp" "$COMPOSE_FILE"
     else
         log_info "compose.yaml 中未发现 image:，在 app 服务下添加 image: ${IMAGE}"
         # 在 `services:` 下的 `app:` 区块追加 image 行（位于 build: 之后）
@@ -218,7 +220,7 @@ set_compose_image() {
             log_err "compose.yaml 中未找到 app 服务，无法设置镜像。"
             exit 1
         fi
-        sed -i "${app_line}a\\    image: ${IMAGE}" "$COMPOSE_FILE"
+        awk -v img="$IMAGE" -v n="$app_line" 'NR==n {print; print "    image: " img; next} {print}' "$COMPOSE_FILE" > "$COMPOSE_FILE.tmp" && mv "$COMPOSE_FILE.tmp" "$COMPOSE_FILE"
     fi
     log_ok "compose.yaml 镜像已设为 ${IMAGE}"
 }
@@ -291,15 +293,21 @@ rollback() {
     docker compose -f "$COMPOSE_FILE" stop >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" rm -f >/dev/null 2>&1 || true
 
-    # 恢复 compose.yaml 镜像为旧镜像（若之前被修改过且原有 image 行存在）
-    # 这里保持 compose.yaml 不变，仅重建旧容器；若无旧镜像本地副本则回滚失败
-    if docker images -q "${IMAGE}" >/dev/null 2>&1; then
-        docker compose -f "$COMPOSE_FILE" up -d
-        log_ok "已重建容器 ${CONTAINER_NAME}。"
-    else
-        log_err "本地不存在镜像 ${IMAGE}，无法回滚。"
+    # 检查旧镜像是否存在本地
+    if ! docker images -q "${OLD_IMAGE}" >/dev/null 2>&1; then
+        log_err "本地不存在镜像 ${OLD_IMAGE}，无法回滚。"
         return 1
     fi
+
+    # 将 compose.yaml 的 image: 恢复为 OLD_IMAGE
+    if [[ -n "$OLD_IMAGE" ]]; then
+        awk -v img="$OLD_IMAGE" '!done && /^[[:space:]]*image:/ {print "    image: " img; done=1; next} {print}' "$COMPOSE_FILE" > "$COMPOSE_FILE.tmp" && mv "$COMPOSE_FILE.tmp" "$COMPOSE_FILE"
+        log_info "compose.yaml 镜像已恢复为 ${OLD_IMAGE}"
+    fi
+
+    # 重建容器
+    docker compose -f "$COMPOSE_FILE" up -d
+    log_ok "已回滚并重建容器 ${CONTAINER_NAME}。"
 }
 
 if [[ "$HEALTHY" != "true" ]]; then

@@ -46,7 +46,6 @@ Docker 部署安装脚本 - 将单体镜像 snack-warehouse-management-app 部�
   $0 --port 8080
   $0 --image registry.example.com/snack-warehouse-management-app:latest --volume snack-data-prod
 EOF
-  exit 0
 }
 
 # ---------- 参数解析 ----------
@@ -61,10 +60,14 @@ while [[ $# -gt 0 ]]; do
     --restart)
       RESTART="$2"; shift 2 ;;
     -h|--help)
-      usage ;;
+      usage
+      exit 0
+      ;;
     *)
       log_error "未知参数: $1"
-      usage ;;
+      usage
+      exit 1
+      ;;
   esac
 done
 
