@@ -223,15 +223,29 @@ CMD ["/app/snack-warehouse-backend"]
 7. `docker stop` 日志出现 `[server] shutting down` 且退出码 0
 ```
 
-### 4.6 测试
+### 4.6 脚本工具链
+
+项目提供四个 Docker 部署脚本，用于打包、安装、更新、卸载单体镜像：
+
+| 脚本 | 用途 | 默认操作 |
+|---|---|---|
+| `docker-build.sh` | 镜像打包 | `docker compose build`，打 `latest` + 日期标签 |
+| `docker-install.sh` | 安装部署 | 创建容器、卷、端口映射、等待健康检查 |
+| `docker-update.sh` | 滚动更新 | 替换镜像、可选备份、自动回滚 |
+| `docker-uninstall.sh` | 卸载清理 | 停止容器、可选删除卷/镜像 |
 
 ```bash
-# 容器内运行测试命令
-$ docker compose exec app sh -c \
-  'curl -kfsS https://127.0.0.1:3000/ -o /dev/null && echo "健康检查 OK"'
+# 1) 打包镜像
+./docker-build.sh
 
-# 数据库备份
-$ docker compose exec app sh -c 'cp /app/data/app.db /app/data/backup.db'
+# 2) 安装部署（宿主机端口可自定义，如 8080）
+./docker-install.sh --port 3000
+
+# 3) 滚动更新（可选备份）
+./docker-update.sh --backup
+
+# 4) 卸载（默认保留数据卷，交互式确认）
+./docker-uninstall.sh
 ```
 
 完整契约见 [`CONTRACT.md`](CONTRACT.md)。
