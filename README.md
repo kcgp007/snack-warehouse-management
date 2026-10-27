@@ -7,8 +7,9 @@
 - [需求与功能.md](docs/需求与功能.md)：功能需求说明
 - [架构文档.md](docs/架构文档.md)：技术架构设计
 - [数据字典.md](docs/数据字典.md)：表结构与关系
+- [API 契约.md](docs/API契约.md)：API 合同、校验规则、排序
+- [测试清单.md](docs/测试清单.md)：测试要求与验证
 - [TODO.md](docs/TODO.md)：待办事项与进度跟踪
-- [CONTRACT.md](CONTRACT.md)：前后端集成契约（API 合同、校验规则、排序、测试清单）
 
 ## 开发
 
